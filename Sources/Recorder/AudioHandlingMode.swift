@@ -1,10 +1,7 @@
 import Foundation
 
-/// What a recording is allowed to leave on disk.
-///
-/// The high-quality pass needs audio to survive the recording, so choosing it is
-/// choosing retention. One control keeps that trade a single unambiguous statement
-/// rather than a pair of coupled toggles.
+/// Whether audio is captured during a recording and processed afterward.
+/// Separate retention settings decide whether it survives successful text processing.
 enum AudioHandlingMode: String, CaseIterable, Identifiable {
     case transcriptOnly
     case keepAudio
@@ -25,11 +22,11 @@ enum AudioHandlingMode: String, CaseIterable, Identifiable {
     var detail: String {
         switch self {
         case .transcriptOnly:
-            return "No audio is ever written to disk. Only transcript.md and transcript.json are saved."
+            return "No audio is ever written to disk. Saves text, plus a local summary when enabled."
         case .keepAudio:
             return "Saves audio.m4a next to the live transcript."
         case .keepAudioAndPolish:
-            return "Saves audio.m4a, then re-transcribes it with the high-quality model and names speakers."
+            return "Saves audio.m4a, then transcribes it with the selected local model."
         }
     }
 
@@ -39,6 +36,10 @@ enum AudioHandlingMode: String, CaseIterable, Identifiable {
 
     var runsPolishPass: Bool {
         self == .keepAudioAndPolish
+    }
+
+    func requiresOfflineTranscription(deleteAudioAfterProcessing: Bool) -> Bool {
+        retainsAudio && (runsPolishPass || deleteAudioAfterProcessing)
     }
 
     /// True when this mode combined with the live setting would save nothing at all.

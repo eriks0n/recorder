@@ -97,11 +97,19 @@ final class RecorderModel {
     }
     /// Whether voice profiles are matched and enrolled. Off by default.
     var voiceProfilesEnabled: Bool = false {
-        didSet { Preferences.voiceProfiles = voiceProfilesEnabled }
+        didSet {
+            Preferences.voiceProfiles = voiceProfilesEnabled
+            live.fingerprinting.setEnabled(voiceProfilesEnabled)
+            if voiceProfilesEnabled { speakerStore.reload() }
+            else {
+                speakerStore.suspend(); live.discardSpeakerModels()
+                lastDocument?.proposedNames = nil; lastDocument?.speakerCentroidsID = nil
+            }
+        }
     }
 
     /// Saved voiceprints. Observed, so the Speakers pane updates as profiles change.
-    let speakerStore = SpeakerProfileStore()
+    let speakerStore = SpeakerProfileStore(loadOnInit: false)
 
     /// The document behind the transcript currently shown, kept so a rename can
     /// re-render `transcript.md` from its source rather than patching the markdown.
@@ -126,11 +134,12 @@ final class RecorderModel {
     var customerScope = "default"
     var summaryStatus: String?
     var summaryRunning = false
+    var deleteAudioAfterProcessing = false { didSet { Preferences.deleteAudioAfterProcessing = deleteAudioAfterProcessing } }
+    var automaticSummaryEnabled: Bool { autoSummary || deleteAudioAfterProcessing }
     var autoSummary = false { didSet { Preferences.autoSummary = autoSummary } }
     var summaryLanguage = "Deutsch" { didSet { Preferences.summaryLanguage = summaryLanguage } }
     var modelDownloadStatus = ""
     var modelDownloadRunning = false
-    var matchingCalibrated = false
     var recordingPath = "" { didSet { Preferences.recordingPath = recordingPath } }
     @ObservationIgnored private var processingTask: Task<Void, Never>?
     @ObservationIgnored private var downloadTask: Task<Void, Never>?
@@ -185,7 +194,7 @@ final class RecorderModel {
         startRetentionChecks()
 
         // Biometric data should not outlive its purpose: drop voiceprints nobody named.
-        speakerStore.prunePending()
+        if voiceProfilesEnabled { speakerStore.prunePending() }
 
         // Request permissions concurrently, then load meetings.
         Task { @MainActor in
@@ -263,6 +272,7 @@ final class RecorderModel {
         speakerLabelsEnabled = Preferences.speakerLabels
         voiceProfilesEnabled = Preferences.voiceProfiles
         recordingPath = Preferences.recordingPath
+        deleteAudioAfterProcessing = Preferences.deleteAudioAfterProcessing
         autoSummary = Preferences.autoSummary
         summaryLanguage = Preferences.summaryLanguage
         retentionDays = Preferences.retentionDays
@@ -504,7 +514,8 @@ final class RecorderModel {
             attendees: attendees,
             startedAt: startedAt
         )
-        let wantsTranscript = liveTranscriptionEnabled || mode.runsPolishPass
+        let needsOfflineTranscription = mode.requiresOfflineTranscription(deleteAudioAfterProcessing: deleteAudioAfterProcessing)
+        let wantsTranscript = liveTranscriptionEnabled || needsOfflineTranscription
         if wantsTranscript {
             transcriptionState = .running
         }
@@ -548,12 +559,10 @@ final class RecorderModel {
             await MainActor.run { [weak self] in
                 guard let self else { return }
                 guard self.state == .idle, self.recordingGeneration == recordingGeneration else { return }
-                if mixError == nil, mode.runsPolishPass {
+                if mixError == nil, needsOfflineTranscription {
                     self.startTranscription(pending)
                 } else if let liveResult, !liveResult.isEmpty, liveResult.complete {
                     self.writeLiveTranscript(liveResult.lines, pending: pending, keepStatus: mixError != nil)
-                } else if mixError == nil, mode.runsPolishPass {
-                    self.startTranscription(pending)
                 } else if let liveResult, !liveResult.isEmpty {
                     self.writeLiveTranscript(liveResult.lines, pending: pending, keepStatus: true)
                 } else {
@@ -689,6 +698,7 @@ final class RecorderModel {
         guard state == .idle, !retentionRunning else { return }
         cancelProcessing()
         let operation = UUID(); processingID = operation
+        let fingerprintToken = live.fingerprinting.token
         lastTranscription = pending
         lastTranscriptText = nil
         lastTranscriptURL = nil
@@ -717,12 +727,12 @@ final class RecorderModel {
                 var proposals: [String: String] = [:]
                 var centroidsID: String?
 
-                if self.voiceProfilesEnabled, !offline.clusters.isEmpty {
-                    let assignments = self.matchingCalibrated ? SpeakerNaming.resolve(
+                if self.voiceProfilesEnabled, self.live.fingerprinting.accepts(fingerprintToken), !offline.clusters.isEmpty {
+                    let assignments = SpeakerNaming.resolve(
                         clusters: offline.clusters,
                         defaultNames: offline.speakerNames,
                         profiles: SpeakerNaming.eligible(self.speakerStore.profiles, meeting: record)
-                    ) : [:]
+                    )
                     for (id, assignment) in assignments {
                         if assignment.profileID != nil { proposals[id] = assignment.name }
                     }
@@ -767,7 +777,8 @@ final class RecorderModel {
                 document.processingWarnings = offline.warnings
                 self.writeTranscript(document: document, pending: pending, keepStatus: false)
                 self.live.releaseModels()
-                if self.autoSummary { await self.generateSummary(operation: operation) }
+                guard case .done = self.transcriptionState else { return }
+                if self.automaticSummaryEnabled { await self.generateSummary(operation: operation) }
             } catch is CancellationError {
                 guard self.processingID == operation else { return }
                 self.transcriptionState = .idle; self.statusMessage = "Verarbeitung abgebrochen"
@@ -801,6 +812,10 @@ final class RecorderModel {
             pending: pending,
             keepStatus: keepStatus
         )
+        if automaticSummaryEnabled, case .done = transcriptionState {
+            let operation = UUID(); processingID = operation
+            processingTask = Task { [weak self] in await self?.generateSummary(operation: operation) }
+        }
     }
 
     /// Write `transcript.json` and render `transcript.md` from it. The sidecar is written
@@ -952,12 +967,22 @@ final class RecorderModel {
         let path = (RecordingsLibrary.recordingsRoot()?.resolvingSymlinksInPath().path ?? "").lowercased()
         return ["mobile documents", "clouddocs", "cloudstorage", "onedrive", "dropbox", "google drive"].contains { path.contains($0) }
     }
-    func enrollSpeaker(id: String, name: String, category: String, email: String?) {
-        guard !retentionRunning else { return }
+    func enrollSpeaker(id: String, name: String) {
+        guard voiceProfilesEnabled, live.fingerprinting.enabled, !retentionRunning else {
+            statusMessage = "Speaker Fingerprinting ist ausgeschaltet."; return
+        }
         guard let doc = lastDocument, let centroid = doc.speakerCentroidsID, let record = doc.meetingRecord else { statusMessage = "Bitte erneut verarbeiten und einen sauberen Abschnitt verwenden."; return }
         do {
-            try speakerStore.enrollInternal(name: name, clusterID: id, pendingID: centroid, meeting: record, category: category, email: email)
+            try speakerStore.confirmVoice(name: name, clusterID: id, pendingID: centroid, meeting: record)
             renameSpeaker(id: id, to: name)
+        } catch { statusMessage = error.localizedDescription }
+    }
+    func deleteAllVoiceData() {
+        live.fingerprinting.invalidate()
+        do {
+            try speakerStore.deleteAllVoiceData()
+            lastDocument?.proposedNames = nil; lastDocument?.speakerCentroidsID = nil
+            statusMessage = "Alle Stimmprofile gelöscht"
         } catch { statusMessage = error.localizedDescription }
     }
     func rejectProposal(id: String) {
@@ -984,7 +1009,8 @@ final class RecorderModel {
         processingTask = Task { await generateSummary(operation: operation) }
     }
     private func generateSummary(operation: UUID) async {
-        guard let document = lastDocument, let pending = lastTranscription else { return }
+        guard processingID == operation, state == .idle, !Task.isCancelled,
+              let document = lastDocument, let pending = lastTranscription else { return }
         let input = document.summaryInput
         summaryStatus = "Zusammenfassen…"
         summaryRunning = true
@@ -998,6 +1024,26 @@ final class RecorderModel {
             guard processingID == operation, lastDocument == document else { return }
             try SummaryRepository.publish(result, transcript: input, folder: pending.folderURL)
             summaryStatus = "Zusammenfassung gespeichert"
+            if deleteAudioAfterProcessing {
+                do {
+                    let removed = try RecordingAudioCleanup.removeAfterSuccessfulProcessing(in: pending.folderURL)
+                    let document = try TranscriptDocument.load(from: pending.folderURL.appendingPathComponent("transcript.json"))
+                    lastDocument = document; lastTranscriptText = document.renderMarkdown()
+                    lastTranscriptURL = (try TranscriptRepository.currentJSON(in: pending.folderURL))?.deletingLastPathComponent().appendingPathComponent("transcript.md")
+                        ?? pending.folderURL.appendingPathComponent("transcript.md")
+                    lastTranscription = PendingTranscription(audioURL: nil, folderURL: pending.folderURL,
+                                                            meetingTitle: pending.meetingTitle, attendees: pending.attendees, startedAt: pending.startedAt)
+                    if let url = lastTranscriptURL { transcriptionState = .done(url) }
+                    refreshRecordings()
+                    summaryStatus = removed > 0
+                        ? "Transkript und Zusammenfassung gespeichert · Audio gelöscht"
+                        : "Transkript und Zusammenfassung gespeichert · kein Audio aufbewahrt"
+                } catch is CancellationError { throw CancellationError() }
+                catch {
+                    refreshRecordings()
+                    summaryStatus = "Zusammenfassung gespeichert. Die Audio-Bereinigung konnte nicht vollständig abgeschlossen werden: " + error.localizedDescription
+                }
+            }
         } catch is CancellationError { if processingID == operation { summaryStatus = "Zusammenfassung abgebrochen" } }
         catch { if processingID == operation { summaryStatus = error.localizedDescription } }
     }
@@ -1007,6 +1053,7 @@ final class RecorderModel {
         guard let url = entry.transcriptURL else { return }
         do {
             lastDocument = try TranscriptDocument.load(from: entry.folderURL.appendingPathComponent("transcript.json"))
+            if !voiceProfilesEnabled { lastDocument?.proposedNames = nil; lastDocument?.speakerCentroidsID = nil }
             lastTranscriptText = lastDocument?.renderMarkdown(); lastTranscriptURL = url
             lastTranscription = PendingTranscription(audioURL: entry.audioURL, folderURL: entry.folderURL, meetingTitle: entry.title, attendees: [], startedAt: entry.date)
             if let document = lastDocument, document.meetingRecord == nil, let pending = lastTranscription {

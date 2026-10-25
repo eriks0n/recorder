@@ -55,6 +55,74 @@ final class RecordingMaintenanceTests: XCTestCase {
         XCTAssertEqual(retained.title, "Original"); XCTAssertNil(retained.audioURL)
         XCTAssertFalse(try RecordingRetention.clean(retained, afterDays: 7, now: now), "Second cleanup is a no-op")
     }
+    func testImmediateCleanupRequiresBothSuccessfulTextResults() throws {
+        let entry = try fixture()
+        try Data("audio".utf8).write(to: entry.folderURL.appendingPathComponent("extra.WAV"))
+        XCTAssertEqual(try RecordingAudioCleanup.removeAfterSuccessfulProcessing(in: entry.folderURL), 4)
+        for name in ["mic.caf", "desktop.caf", "audio.m4a", "extra.WAV"] { XCTAssertFalse(exists(name, in: entry)) }
+        for name in ["transcript.md", "transcript.json", "summary.md", "summary.json", "meeting.json", "scratch.bin"] { XCTAssertTrue(exists(name, in: entry)) }
+        let doc = try TranscriptDocument.load(from: entry.folderURL.appendingPathComponent("transcript.json"))
+        XCTAssertNil(doc.audioName)
+        _ = try SummaryRepository.current(in: entry.folderURL, hash: doc.summaryInput.hash)
+        XCTAssertEqual(try RecordingAudioCleanup.removeAfterSuccessfulProcessing(in: entry.folderURL), 0)
+    }
+    func testLiveFallbackDoesNotDeleteRecoveryAudio() throws {
+        let entry = try fixture()
+        var doc = try TranscriptDocument.load(from: entry.folderURL.appendingPathComponent("transcript.json"))
+        let saved = try RecordingRetention.summaryFiles(in: entry.folderURL)
+        doc.isPolished = false
+        _ = try TranscriptRepository.publish(doc, folder: entry.folderURL)
+        try RecordingRetention.restoreSummaryFiles(saved, in: entry.folderURL)
+        XCTAssertThrowsError(try RecordingAudioCleanup.removeAfterSuccessfulProcessing(in: entry.folderURL))
+        XCTAssertTrue(exists("audio.m4a", in: entry))
+    }
+    func testImmediateCleanupPreservesAudioWhenSummaryMissing() throws {
+        let entry = try fixture(summary: false)
+        XCTAssertThrowsError(try RecordingAudioCleanup.removeAfterSuccessfulProcessing(in: entry.folderURL))
+        for name in ["audio.m4a", "mic.caf", "desktop.caf"] { XCTAssertTrue(exists(name, in: entry)) }
+    }
+    func testImmediateCleanupPreservesAudioForStaleSummary() throws {
+        let entry = try fixture()
+        var pointer = try PrivateStorage.read(SummaryRepository.Pointer.self, from: entry.folderURL.appendingPathComponent("current-summary.json"))
+        pointer.transcriptHash = "outdated"
+        try PrivateStorage.save(pointer, to: entry.folderURL.appendingPathComponent("current-summary.json"))
+        XCTAssertThrowsError(try RecordingAudioCleanup.removeAfterSuccessfulProcessing(in: entry.folderURL))
+        XCTAssertTrue(exists("audio.m4a", in: entry))
+    }
+    func testImmediateCleanupRejectsInvalidEvidence() throws {
+        let entry = try fixture()
+        let doc = try TranscriptDocument.load(from: entry.folderURL.appendingPathComponent("transcript.json"))
+        let input = doc.summaryInput
+        let content = SummaryContent(executiveSummary: [], topics: [], actionItems: [.init(task: "Invented", owner: nil, deadline: nil, kind: "commitment", evidence: [.init(turnID: "T999", quote: "Invented")])], nextSteps: [])
+        let summary = MeetingSummary(meetingID: input.meeting.id, transcriptHash: input.hash, modelVersion: "fixture", language: "Deutsch", content: content)
+        try SummaryRepository.publish(summary, transcript: input, folder: entry.folderURL)
+        XCTAssertThrowsError(try RecordingAudioCleanup.removeAfterSuccessfulProcessing(in: entry.folderURL))
+        XCTAssertTrue(exists("audio.m4a", in: entry))
+    }
+    func testImmediateCleanupRejectsIncompleteSummaryMarkdown() throws {
+        let entry = try fixture()
+        let doc = try TranscriptDocument.load(from: entry.folderURL.appendingPathComponent("transcript.json"))
+        let markdown = try SummaryRepository.current(in: entry.folderURL, hash: doc.summaryInput.hash)
+        try Data().write(to: markdown)
+        XCTAssertThrowsError(try RecordingAudioCleanup.removeAfterSuccessfulProcessing(in: entry.folderURL))
+        XCTAssertTrue(exists("audio.m4a", in: entry))
+    }
+    func testCancelledImmediateCleanupLeavesAudio() async throws {
+        let entry = try fixture()
+        let task = Task { try RecordingAudioCleanup.removeAfterSuccessfulProcessing(in: entry.folderURL) }
+        task.cancel()
+        do { _ = try await task.value; XCTFail("Cancellation must stop deletion") }
+        catch is CancellationError { }
+        XCTAssertTrue(exists("audio.m4a", in: entry))
+    }
+    func testImmediateCleanupNeverDeletesLinkedExternalAudio() throws {
+        let entry = try fixture()
+        let outside = root.appendingPathComponent("outside.wav")
+        try Data("keep outside".utf8).write(to: outside)
+        try FileManager.default.createSymbolicLink(at: entry.folderURL.appendingPathComponent("external.wav"), withDestinationURL: outside)
+        _ = try RecordingAudioCleanup.removeAfterSuccessfulProcessing(in: entry.folderURL)
+        XCTAssertEqual(try String(contentsOf: outside, encoding: .utf8), "keep outside")
+    }
     func testYoungRecordingIsUntouched() throws {
         let entry = try fixture(ageDays: 2)
         let before = Set(try FileManager.default.contentsOfDirectory(atPath: entry.folderURL.path))

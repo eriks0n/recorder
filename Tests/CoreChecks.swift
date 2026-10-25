@@ -59,9 +59,9 @@ struct CoreChecks {
         }
         let anna = profile("Anna", [1, 0])
         let all = [anna, profile("Other scope", [1, 0], scope: "customer-b"), profile("External", [1, 0], category: "external"), profile("Old version", [1, 0], version: "old"), profile("Not invited", [1, 0], email: "not@company.test")]
-        try check(SpeakerNaming.eligible(all, meeting: meeting).map(\.id) == [anna.id], "Scope, category, roster and version must all match")
+        try check(Set(SpeakerNaming.eligible(all, meeting: meeting).map(\.name)) == Set(["Anna", "External", "Not invited"]), "Scope and model version must match; legacy categories and calendar attendance do not restrict profiles")
         meeting.hasCalendarEvent = false
-        try check(SpeakerNaming.eligible(all, meeting: meeting).count == 2, "Without a calendar event, only this scope's internal/self profiles qualify")
+        try check(SpeakerNaming.eligible(all, meeting: meeting).count == 3, "Calendar availability does not change fingerprint eligibility")
         let clusters = ["s1": ClusterEvidence(centroid: [1, 0], speechSeconds: 10)]
         let ambiguous = SpeakerNaming.resolve(clusters: clusters, defaultNames: ["s1": "Speaker 1"], profiles: [anna, profile("Near tie", [1, 0.01])])
         try check(ambiguous["s1"]?.profileID == nil, "Near ties must remain unknown")
@@ -74,10 +74,10 @@ struct CoreChecks {
         let pending = PendingSpeakers(id: UUID().uuidString, createdAt: Date(), clusters: ["s1": .init(vector: [1, 0], speechSeconds: 10)])
         try store.writePending(pending)
         try check(!FileManager.default.fileExists(atPath: storeFolder.path), "Unconfirmed embeddings must remain in memory")
-        try rejects({ try store.enrollInternal(name: "External", clusterID: "s1", pendingID: pending.id, meeting: meeting, category: "external", email: nil) }, "External enrollment must fail")
-        try store.enrollInternal(name: "Anna", clusterID: "s1", pendingID: pending.id, meeting: meeting, category: "internal", email: "anna@company.test")
-        try check(store.profiles.count == 1, "Explicit internal enrollment persists")
-        try store.enrollInternal(name: "Anna", clusterID: "s1", pendingID: pending.id, meeting: meeting, category: "internal", email: "anna@company.test")
+        try rejects({ try store.confirmVoice(name: " ", clusterID: "s1", pendingID: pending.id, meeting: meeting) }, "A profile requires a confirmed name")
+        try store.confirmVoice(name: "Anna", clusterID: "s1", pendingID: pending.id, meeting: meeting)
+        try check(store.profiles.count == 1, "Explicit confirmation persists a profile without categories")
+        try store.confirmVoice(name: "Anna", clusterID: "s1", pendingID: pending.id, meeting: meeting)
         try check(store.profiles.first?.centroids.count == 1, "Repeated confirmation must not duplicate references")
         let permissions = try FileManager.default.attributesOfItem(atPath: storeFolder.path)[.posixPermissions] as? Int
         try check(permissions == 0o700, "Private directory permissions")

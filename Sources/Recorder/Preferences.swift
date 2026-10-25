@@ -20,6 +20,10 @@ enum Preferences {
         static let voiceProfiles       = "voiceProfilesEnabled"
     }
 
+    static var deleteAudioAfterProcessing: Bool {
+        get { defaults.bool(forKey: "deleteAudioAfterSuccessfulProcessing") }
+        set { defaults.set(newValue, forKey: "deleteAudioAfterSuccessfulProcessing") }
+    }
     static var retentionEnabled: Bool {
         get { defaults.bool(forKey: "recordingRetentionEnabled") }
         set { defaults.set(newValue, forKey: "recordingRetentionEnabled") }

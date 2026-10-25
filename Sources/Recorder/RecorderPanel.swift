@@ -44,6 +44,10 @@ struct RecorderPanel: View {
                 .disabled(model.retentionRunning)
 
             audioHandlingChip
+            if model.deleteAudioAfterProcessing && model.audioHandlingMode.retainsAudio {
+                Text("Audio wird nur bis zur erfolgreichen Transkription und Zusammenfassung aufbewahrt.")
+                    .font(.caption2).foregroundStyle(.secondary)
+            }
 
             if model.state != .idle && !model.audioHandlingMode.retainsAudio {
                 Label("Transcript only, no audio saved", systemImage: "eye.slash")
@@ -885,8 +889,6 @@ private struct MeetingRow: View {
 private struct SpeakerChip: View {
     @Environment(RecorderModel.self) private var model
     @State private var enrollVoice = false
-    @State private var category = "internal"
-    @State private var email = ""
     let id: String
     let name: String
     let rename: (String) -> Void
@@ -918,19 +920,16 @@ private struct SpeakerChip: View {
             VStack(alignment: .leading, spacing: 8) {
                 Text("Sprecher bestätigen")
                 Button("Referenz anhören") { model.playReference(id: id) }
-                if let proposal = model.lastDocument?.proposedNames?[id] {
+                if model.voiceProfilesEnabled, let proposal = model.lastDocument?.proposedNames?[id] {
                     Text("Vorschlag: \(proposal)")
                     Button("Vorschlag übernehmen (dieses Meeting)") { draft = proposal; apply() }
                     Button("Vorschlag ablehnen") { model.rejectProposal(id: id) }
                 }
-                Toggle("Als internes Stimmprofil speichern", isOn: $enrollVoice)
-                if enrollVoice {
-                    Picker("Person", selection: $category) {
-                        Text("Eigene Stimme").tag("self")
-                        Text("Interne Person").tag("internal")
-                    }
-                    TextField("Kalender-E-Mail (optional)", text: $email)
-                    Text("Die Einwilligung der Person sollte vorliegen. Externe Personen nur für dieses Meeting benennen.").font(.caption)
+                if model.voiceProfilesEnabled {
+                    Toggle("Als Stimmprofil speichern", isOn: $enrollVoice)
+                    if enrollVoice { Text("Die Zustimmung der Person sollte vorliegen. Nur ausdrücklich bestätigte Stimmen werden gespeichert.").font(.caption) }
+                } else {
+                    Text("Fingerprinting ist aus. Der Name gilt nur für dieses Meeting.").font(.caption)
                 }
                 TextField("Name", text: $draft)
                     .textFieldStyle(.roundedBorder)
@@ -950,7 +949,7 @@ private struct SpeakerChip: View {
     private func apply() {
         let trimmed = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
-        if enrollVoice { model.enrollSpeaker(id: id, name: trimmed, category: category, email: email.isEmpty ? nil : email) }
+        if enrollVoice && model.voiceProfilesEnabled { model.enrollSpeaker(id: id, name: trimmed) }
         else { rename(trimmed) }
         editing = false
     }

@@ -12,6 +12,6 @@ swiftc -swift-version 5 -parse-as-library -sdk "$SDK" -module-cache-path .build/
   Sources/Recorder/OptionalSpeakerAnalysis.swift Sources/Recorder/OfflineTranscription.swift Sources/Recorder/SpeakerProfile.swift Sources/Recorder/SpeakerProfileStore.swift \
   Sources/Recorder/TranscriptDocument.swift Sources/Recorder/TranscriptLine.swift \
   Sources/Recorder/TranscriptRepository.swift Sources/Recorder/SummaryRepository.swift Sources/Recorder/StereoMixer.swift \
-  Sources/Recorder/Shared.swift Sources/Recorder/RecordingsLibrary.swift Sources/Recorder/RecordingMaintenance.swift Sources/Recorder/Preferences.swift \
+  Sources/Recorder/Shared.swift Sources/Recorder/RecordingsLibrary.swift Sources/Recorder/RecordingMaintenance.swift Sources/Recorder/RecordingAudioCleanup.swift Sources/Recorder/SpeakerFingerprinting.swift Sources/Recorder/Preferences.swift \
   Sources/Recorder/AudioHandlingMode.swift Sources/Recorder/WhisperModelOptions.swift Tests/CoreChecks.swift -o .build/recorder-core-checks
 .build/recorder-core-checks

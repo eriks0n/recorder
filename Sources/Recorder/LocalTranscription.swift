@@ -18,6 +18,7 @@ final class LocalTranscriptionEngine {
 
     let host: WhisperModelHost
     let live: LiveTranscriber
+    let fingerprinting = SpeakerFingerprinting()
 
     init() {
         let host = WhisperModelStorage.makeHost()
@@ -108,10 +109,12 @@ final class LocalTranscriptionEngine {
     /// therefore run one after the other.
     var processingStage = ""
     func releaseModels() { host.unload(); speakerKit = nil }
+    func discardSpeakerModels() { speakerKit = nil }
 
     func transcribeFile(_ url: URL) async throws -> OfflineTranscription {
         var allWords: [TranscriptWord] = [], intervals: [SpeakerInterval] = [], cleanClusters: [String: ClusterEvidence] = [:]
         var warnings: [String] = []
+        let fingerprintToken = fingerprinting.token
         let channelCount = Self.channelCount(of: url)
         for channel in 0..<min(2, channelCount) {
             try Task.checkCancellation()
@@ -124,8 +127,13 @@ final class LocalTranscriptionEngine {
             let audioWords = text.map { TranscriptWord(text: $0.text, start: $0.start, end: $0.end,
                                                       channel: channel == 0 ? .desktop : .microphone, speakerID: "unknown") }
             allWords += audioWords
+            guard fingerprinting.accepts(fingerprintToken) else { continue }
             processingStage = "Sprecher trennen: Kanal \(channel + 1)"
-            let analysis = try await OptionalSpeakerAnalysis.run { try await self.diarize(samples) }
+            let analysis = try await fingerprinting.analyze(fingerprintToken) {
+                try await OptionalSpeakerAnalysis.run { try await self.diarize(samples) }
+            }
+            // Disabling the feature invalidates even an already-running Core ML result.
+            guard fingerprinting.accepts(fingerprintToken) else { continue }
             if let warning = analysis.warning, !warnings.contains(warning) { warnings.append(warning) }
             let spans = analysis.spans
             let audioChannel: AudioChannel = channel == 0 ? .desktop : .microphone
@@ -137,6 +145,7 @@ final class LocalTranscriptionEngine {
             // Never persist a centroid aggregated from overlapping or uncertain segments.
             for clusterID in Set(spans.map(\.clusterID)) {
                 try Task.checkCancellation()
+                guard fingerprinting.accepts(fingerprintToken) else { break }
                 let clean = spans.filter { span in
                     span.clusterID == clusterID && span.end - span.start >= SpeakerNaming.minSpeechSeconds && !spans.contains {
                         $0.clusterID != clusterID && min($0.end, span.end) > max($0.start, span.start)
@@ -145,7 +154,10 @@ final class LocalTranscriptionEngine {
                 if let span = clean.max(by: { $0.end - $0.start < $1.end - $1.start }) {
                     let first = max(0, Int(span.start * 16000)), last = min(samples.count, Int(min(span.end, span.start + 12) * 16000))
                     if last > first {
-                        let reference = try await OptionalSpeakerAnalysis.run { try await self.diarize(Array(samples[first..<last])) }
+                        let reference = try await fingerprinting.analyze(fingerprintToken) {
+                            try await OptionalSpeakerAnalysis.run { try await self.diarize(Array(samples[first..<last])) }
+                        }
+                        guard fingerprinting.accepts(fingerprintToken) else { break }
                         if reference.warning != nil {
                             let warning = "Kein geeignetes Stimmprofil aus dem Referenzabschnitt erstellt. Transkript und vorhandene Sprecherabschnitte bleiben erhalten."
                             if !warnings.contains(warning) { warnings.append(warning) }
@@ -156,6 +168,9 @@ final class LocalTranscriptionEngine {
                     }
                 }
             }
+        }
+        if !fingerprinting.accepts(fingerprintToken) {
+            intervals.removeAll(); cleanClusters.removeAll(); warnings.removeAll()
         }
         let (_, turns) = TranscriptAssembler.assemble(words: allWords, intervals: intervals)
         // Cross-channel simultaneous speech also makes enrollment conservative.

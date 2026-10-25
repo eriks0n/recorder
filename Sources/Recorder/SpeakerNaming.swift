@@ -20,16 +20,11 @@ enum SpeakerNaming {
     /// are the ones most likely to put a real person's name on the wrong voice.
     static let minSpeechSeconds: Double = 6
 
-    /// The speaker id of the microphone channel, which is the user by construction.
+    /// Legacy microphone label retained for old transcripts; current recordings never infer identity from a channel.
     static let micSpeakerID = "you"
     static let embeddingVersion = "SpeakerKit-1.1.0/pyannote-v3-W8A16@556fc52"
     static func eligible(_ profiles: [SpeakerProfile], meeting: MeetingRecord) -> [SpeakerProfile] {
-        let emails = Set(meeting.attendeeEmails.map { $0.lowercased() })
-        return profiles.filter { profile in
-            profile.scope == meeting.scope && profile.embeddingVersion == embeddingVersion &&
-            ["self", "internal"].contains(profile.category ?? "") &&
-            (profile.category == "self" || !meeting.hasCalendarEvent || profile.email.map { emails.contains($0.lowercased()) } == true)
-        }
+        profiles.filter { $0.scope == meeting.scope && $0.embeddingVersion == embeddingVersion }
     }
 
     struct Assignment: Equatable {

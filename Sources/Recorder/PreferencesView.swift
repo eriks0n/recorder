@@ -222,8 +222,8 @@ private struct SpeakerPreferences: View {
         @Bindable var model = model
         Form {
             Section {
-                Toggle("Label speakers", isOn: $model.speakerLabelsEnabled)
-                Text("Der Offline-Durchlauf trennt Sprecher auf beiden Kanälen. Mikrofon und Desktop sind Quellen, keine Personennamen.")
+                Toggle("Quellenhinweise im Live-Transkript", isOn: $model.speakerLabelsEnabled)
+                Text("Zeigt Mikrofon/Desktop im optionalen Live-Transkript. Stimmenanalyse und Wiedererkennung werden separat mit Speaker Fingerprinting eingeschaltet.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             } header: {
@@ -231,17 +231,23 @@ private struct SpeakerPreferences: View {
             }
 
             Section {
-                Toggle("Match voices to saved profiles", isOn: $model.voiceProfilesEnabled)
-                Text("Umbenennen gilt nur für dieses Meeting. Ein Profil wird ausschließlich über die gesonderte Bestätigung als eigene oder interne Stimme angelegt. Die Einwilligung der Person sollte vorliegen.")
+                Toggle("Speaker Fingerprinting", isOn: $model.voiceProfilesEnabled)
+                if model.voiceProfilesEnabled && !ModelManager.ready("diar") {
+                    Text("Das Stimmenmodell fehlt noch.").font(.caption)
+                    Button("Stimmenmodell herunterladen") { model.downloadModels("diar") }
+                        .disabled(model.modelDownloadRunning)
+                    if !model.modelDownloadStatus.isEmpty { Text(model.modelDownloadStatus).font(.caption) }
+                }
+                Text("Ein: Stimmen lokal analysieren und bekannte Stimmen als Namensvorschläge anbieten. Aus: keine Stimmenanalyse, keine Wiedererkennung und keine neuen Stimmprofile; vorhandene Profile bleiben gespeichert und werden nicht geladen. Umbenennen bleibt für dieses Meeting möglich.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             } header: {
-                Text("Voice profiles")
+                Text("Speaker Fingerprinting")
             }
 
             Section {
-                if model.speakerStore.profiles.isEmpty {
-                    Text("Noch keine bestätigten internen Stimmen. Ein Profil lässt sich über den Sprecher im Transkript anlegen.")
+                if !model.voiceProfilesEnabled || model.speakerStore.profiles.isEmpty {
+                    Text("Noch keine Stimmen geladen. Bei eingeschaltetem Fingerprinting kannst du einen Sprecher ausdrücklich als Stimmprofil bestätigen.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 } else {
@@ -262,6 +268,8 @@ private struct SpeakerPreferences: View {
                         }
                     }
 
+                }
+                if model.speakerStore.hasStoredVoiceData {
                     Button("Delete all voice data", role: .destructive) {
                         confirmingDeleteAll = true
                     }
@@ -271,13 +279,14 @@ private struct SpeakerPreferences: View {
                         titleVisibility: .visible
                     ) {
                         Button("Delete all voice data", role: .destructive) {
-                            try? model.speakerStore.deleteAllVoiceData()
+                            model.deleteAllVoiceData()
                         }
                         Button("Cancel", role: .cancel) {}
                     } message: {
                         Text("This removes every profile and every stored voiceprint, including ones waiting to be named. Transcripts keep the names already written into them.")
                     }
                 }
+
             } header: {
                 Text("Saved voices")
             }

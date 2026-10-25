@@ -3,6 +3,16 @@ import XCTest
 
 final class AudioHandlingModeTests: XCTestCase {
 
+    func testImmediateCleanupForcesOfflineTextProcessingForKeptAudio() {
+        XCTAssertTrue(AudioHandlingMode.keepAudio.requiresOfflineTranscription(deleteAudioAfterProcessing: true))
+        XCTAssertTrue(AudioHandlingMode.keepAudioAndPolish.requiresOfflineTranscription(deleteAudioAfterProcessing: true))
+        XCTAssertFalse(AudioHandlingMode.transcriptOnly.requiresOfflineTranscription(deleteAudioAfterProcessing: true))
+    }
+    func testDefaultProcessingModesRemainUnchangedWithoutImmediateCleanup() {
+        XCTAssertFalse(AudioHandlingMode.keepAudio.requiresOfflineTranscription(deleteAudioAfterProcessing: false))
+        XCTAssertTrue(AudioHandlingMode.keepAudioAndPolish.requiresOfflineTranscription(deleteAudioAfterProcessing: false))
+    }
+
     func testOnlyKeepAudioModesRetainAudio() {
         XCTAssertFalse(AudioHandlingMode.transcriptOnly.retainsAudio)
         XCTAssertTrue(AudioHandlingMode.keepAudio.retainsAudio)

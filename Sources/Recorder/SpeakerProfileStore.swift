@@ -59,10 +59,12 @@ final class SpeakerProfileStore {
 
     private var profilesURL: URL { baseURL.appendingPathComponent("profiles.json") }
 
-    init(baseURL: URL = SpeakerProfileStore.defaultBaseURL) {
+    init(baseURL: URL = SpeakerProfileStore.defaultBaseURL, loadOnInit: Bool = true) {
         self.baseURL = baseURL
-        reload()
+        if loadOnInit { reload() }
     }
+    var hasStoredVoiceData: Bool { FileManager.default.fileExists(atPath: profilesURL.path) }
+    func suspend() { profiles.removeAll(); clearPending() }
 
     // MARK: Reading
 
@@ -191,30 +193,35 @@ final class SpeakerProfileStore {
         return profileID
     }
 
-    func enrollInternal(name: String, clusterID: String, pendingID: String, meeting: MeetingRecord,
-                        category: String, email: String?) throws {
-        guard ["self", "internal"].contains(category), let pending = loadPending(id: pendingID),
-              let cluster = pending.clusters[clusterID], cluster.speechSeconds >= SpeakerNaming.minSpeechSeconds,
+    func confirmVoice(name: String, clusterID: String, pendingID: String, meeting: MeetingRecord) throws {
+        guard let pending = loadPending(id: pendingID), let cluster = pending.clusters[clusterID],
+              cluster.speechSeconds >= SpeakerNaming.minSpeechSeconds,
               !cluster.vector.isEmpty, cluster.vector.allSatisfy(\.isFinite),
-              !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw LocalError.message("Kein geeigneter sauberer Referenzabschnitt verfügbar. Bitte nur für dieses Meeting benennen.") }
-        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        if let previous = cluster.appliedProfileID,
-           let profile = profiles.first(where: { $0.id == previous }),
-           profile.name != trimmed || profile.scope != meeting.scope || profile.category != category {
+              cluster.vector.contains(where: { $0 != 0 }),
+              let trimmed = MeetingNaming.clean(name) else {
+            throw LocalError.message("Kein geeigneter sauberer Referenzabschnitt verfügbar. Bitte nur für dieses Meeting benennen.")
+        }
+        if let previous = cluster.appliedProfileID, let profile = profiles.first(where: { $0.id == previous }),
+           profile.name.caseInsensitiveCompare(trimmed) != .orderedSame || profile.scope != meeting.scope {
             try retract(centroidAddedAt: pending.createdAt, from: previous)
         }
         let vector = VoiceCentroid(vector: cluster.vector, sampleSeconds: cluster.speechSeconds, addedAt: pending.createdAt)
-        if let i = profiles.firstIndex(where: { $0.name == trimmed && $0.scope == meeting.scope && $0.category == category && $0.embeddingVersion == SpeakerNaming.embeddingVersion }) {
-            if !profiles[i].centroids.contains(where: { $0.addedAt == vector.addedAt }) { profiles[i].appendCentroid(vector) }
+        let index: Int
+        if let existing = profiles.firstIndex(where: {
+            $0.name.caseInsensitiveCompare(trimmed) == .orderedSame && $0.scope == meeting.scope && $0.embeddingVersion == SpeakerNaming.embeddingVersion
+        }) {
+            index = existing
+            if !profiles[index].centroids.contains(where: { $0.addedAt == vector.addedAt }) { profiles[index].appendCentroid(vector) }
         } else {
             var profile = SpeakerProfile(id: UUID(), name: trimmed, createdAt: Date(), updatedAt: Date(), centroids: [vector])
-            profile.scope = meeting.scope; profile.category = category; profile.email = email?.lowercased()
-            profile.embeddingVersion = SpeakerNaming.embeddingVersion
-            profiles.append(profile)
+            profile.scope = meeting.scope; profile.embeddingVersion = SpeakerNaming.embeddingVersion
+            profiles.append(profile); index = profiles.count - 1
         }
+        // Old category/email fields are no longer used; keep decoding legacy files without classifying new profiles.
+        profiles[index].category = nil; profiles[index].email = nil
         try save()
         var updated = pending
-        updated.clusters[clusterID]?.appliedProfileID = profiles.first(where: { $0.name == trimmed && $0.scope == meeting.scope && $0.category == category && $0.embeddingVersion == SpeakerNaming.embeddingVersion })?.id
+        updated.clusters[clusterID]?.appliedProfileID = profiles[index].id
         pendingMemory[pendingID] = updated
     }
     func renameProfile(_ id: UUID, to name: String) throws {

@@ -30,6 +30,10 @@ struct LocalProcessingPreferences: View {
                 Text("Vor der Aufnahme bestätigen. Ohne Zuordnung: default. Profile werden nur innerhalb dieses Bereichs verglichen.").font(.caption)
             }
             Section("Aufbewahrung") {
+                Toggle("Audio direkt nach Transkription und Zusammenfassung löschen", isOn: $model.deleteAudioAfterProcessing)
+                    .disabled(!MeetingSummaryService.isAvailable)
+                Text("Erstellt automatisch auch die lokale Zusammenfassung. Audio wird erst entfernt, wenn Transkript und Zusammenfassung erfolgreich gespeichert sind. Bei Fehlern oder Abbruch bleibt Audio erhalten. Nach dem Löschen ist keine erneute Transkription aus Audio möglich.")
+                    .font(.caption).foregroundStyle(.secondary)
                 Toggle("Alte Aufnahmedateien automatisch löschen", isOn: $model.retentionEnabled)
                 if model.retentionEnabled {
                     Stepper("Nach \(model.retentionDays) Tagen", value: $model.retentionDays, in: 1...3650)
@@ -49,7 +53,9 @@ struct LocalProcessingPreferences: View {
                 if let status = model.retentionStatus { Text(status).font(.caption).foregroundStyle(.secondary) }
             }
             Section("Zusammenfassung") {
-                Toggle("Nach dem Offline-Transkript automatisch erstellen", isOn: $model.autoSummary)
+                Toggle("Nach dem Offline-Transkript automatisch erstellen", isOn: Binding(
+                    get: { model.automaticSummaryEnabled }, set: { model.autoSummary = $0 }))
+                    .disabled(model.deleteAudioAfterProcessing)
                 Picker("Sprache", selection: $model.summaryLanguage) {
                     Text("Deutsch").tag("Deutsch"); Text("English").tag("English")
                 }
@@ -58,10 +64,7 @@ struct LocalProcessingPreferences: View {
                      : "Zusammenfassungen sind in dieser App-Version nicht verfügbar. Bitte die vollständige Recorder-Version verwenden.")
                     .font(.caption)
             }
-            Section("Sprecherprofile") {
-                Toggle("Namensvorschläge aktivieren (nach eigener Kalibrierung)", isOn: $model.matchingCalibrated)
-                Text("Konservative Startschwellen sind noch nicht an deinen Aufnahmen kalibriert. Vorschläge werden nie automatisch bestätigt. Interne Kalenderpersonen benötigen eine passende Profil-E-Mail-Adresse.").font(.caption)
-            }
+
         }.formStyle(.grouped)
     }
 }
