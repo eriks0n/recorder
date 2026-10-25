@@ -6,14 +6,16 @@ import AppKit
 /// Layout (top -> bottom):
 ///   1. Header — state badge + elapsed (mm:ss) + status line
 ///   2. Primary controls — Record (idle) OR Pause/Resume + Save + Trash (recording/paused)
+///   2b. Live transcript: streams in while recording, with a copy button and a
+///       model switcher (only shown when live transcription is enabled)
 ///   3. Two level meters — "Desktop (L)" + "Mic (R)" bound to model.desktopLevel/micLevel
 ///   4. Meetings list — title + time range, with a per-row record button; in-progress highlighted
 ///   5. Footer — Recordings folder + Settings… + Quit
 ///
-/// Preferences (your name, Gemini API key, auto-transcribe, the editable prompt,
-/// and silence auto-stop) live in a dedicated Preferences window — see
-/// `PreferencesView` / `PreferencesWindowController` — opened from the footer's
-/// "Settings…" button or ⌘,.
+/// Preferences (transcription model, language, live transcription,
+/// auto-transcribe, and silence auto-stop) live in a dedicated Preferences
+/// window (see `PreferencesView` / `PreferencesWindowController`), opened from
+/// the footer's "Settings…" button or ⌘,.
 ///
 /// Pure SwiftUI, compiles under Swift 5 language mode. Reads the shared @Observable model
 /// from the environment and never mutates audio objects directly — it only calls the
@@ -30,6 +32,19 @@ struct RecorderPanel: View {
             Divider()
 
             controls
+
+            audioHandlingChip
+
+            if model.state != .idle && !model.audioHandlingMode.retainsAudio {
+                Label("Transcript only, no audio saved", systemImage: "eye.slash")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+
+            if model.state != .idle && model.live.isSessionActive {
+                Divider()
+                liveTranscriptSection
+            }
 
             if showTranscription {
                 Divider()
@@ -120,6 +135,33 @@ struct RecorderPanel: View {
     }
 
     // MARK: - 2. Primary controls
+
+    private var audioHandlingChip: some View {
+        Menu {
+            ForEach(AudioHandlingMode.allCases) { mode in
+                Button {
+                    model.changeAudioHandling(to: mode)
+                } label: {
+                    if mode == model.audioHandlingMode {
+                        Label(mode.label, systemImage: "checkmark")
+                    } else {
+                        Text(mode.label)
+                    }
+                }
+            }
+        } label: {
+            Label(
+                model.audioHandlingMode.retainsAudio ? "Audio kept" : "Transcript only",
+                systemImage: model.audioHandlingMode.retainsAudio
+                    ? "waveform.circle"
+                    : "eye.slash.circle"
+            )
+            .font(.caption)
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+        .help(model.audioHandlingMode.detail)
+    }
 
     @ViewBuilder
     private var controls: some View {
@@ -212,7 +254,145 @@ struct RecorderPanel: View {
         }
     }
 
-    // MARK: - 2b. Transcription
+    // MARK: - 2b. Live transcript (while recording)
+
+    private var liveTranscriptSection: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                Text("Live transcript")
+                    .font(.subheadline.weight(.semibold))
+
+                Spacer()
+
+                modelSwitcher
+
+                Button {
+                    model.copyLiveTranscript()
+                } label: {
+                    Image(systemName: "doc.on.clipboard")
+                }
+                .buttonStyle(.borderless)
+                .disabled(!model.live.hasText)
+                .help("Copy the transcript so far")
+            }
+
+            engineStatusLine
+
+            liveTranscriptScroll
+        }
+    }
+
+    /// Quick model switcher: same catalog as Settings, usable mid-recording
+    /// (the engine reloads and the live window catches up).
+    private var modelSwitcher: some View {
+        Menu {
+            ForEach(WhisperModelOption.catalog) { option in
+                Button {
+                    model.whisperModel = option.id
+                } label: {
+                    if option.id == model.whisperModel {
+                        Label("\(option.label) (\(option.detail))", systemImage: "checkmark")
+                    } else {
+                        Text("\(option.label) (\(option.detail))")
+                    }
+                }
+            }
+        } label: {
+            HStack(spacing: 3) {
+                Image(systemName: "cpu")
+                Text(WhisperModelOption.label(for: model.whisperModel))
+            }
+            .font(.caption)
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+        .help("Transcription model")
+    }
+
+    @ViewBuilder
+    private var engineStatusLine: some View {
+        switch model.live.engineState {
+        case .downloading(let name, let fraction):
+            HStack(spacing: 6) {
+                ProgressView(value: fraction)
+                    .controlSize(.small)
+                Text("Downloading \(WhisperModelOption.label(for: name)) model… \(Int(fraction * 100))%")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+        case .loading(let name):
+            HStack(spacing: 6) {
+                ProgressView()
+                    .controlSize(.small)
+                Text("Loading \(WhisperModelOption.label(for: name)) model…")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+        case .failed(let message):
+            engineWarning(message)
+        case .ready:
+            if let message = model.live.loadFailureMessage {
+                engineWarning(message)
+            }
+        case .unloaded, .notDownloaded:
+            EmptyView()
+        }
+    }
+
+    private func engineWarning(_ message: String) -> some View {
+        HStack(alignment: .top, spacing: 4) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(.orange)
+                .font(.caption2)
+            Text(message)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .lineLimit(2)
+        }
+    }
+
+    private var liveTranscriptScroll: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                VStack(alignment: .leading, spacing: 4) {
+                    if !model.live.hasText {
+                        Text("Listening…")
+                            .font(.caption)
+                            .foregroundStyle(.tertiary)
+                    }
+                    ForEach(model.live.confirmedLines) { line in
+                        (Text("[\(line.timestampLabel)] ").foregroundStyle(.secondary)
+                         + Text(line.speaker.map { "\($0): " } ?? "").bold()
+                         + Text(line.text))
+                            .font(.caption)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .textSelection(.enabled)
+                    }
+                    if !model.live.hypothesis.isEmpty {
+                        Text(model.live.hypothesis)
+                            .font(.caption)
+                            .italic()
+                            .foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    Color.clear
+                        .frame(height: 1)
+                        .id("live-transcript-bottom")
+                }
+                .padding(6)
+            }
+            .frame(height: 150)
+            .background(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(Color.primary.opacity(0.04))
+            )
+            .onChange(of: model.live.revision) {
+                proxy.scrollTo("live-transcript-bottom", anchor: .bottom)
+            }
+        }
+    }
+
+    // MARK: - 2c. Transcription (post-save)
 
     private var showTranscription: Bool {
         model.transcriptionState != .idle
@@ -228,7 +408,7 @@ struct RecorderPanel: View {
             HStack(spacing: 8) {
                 ProgressView()
                     .controlSize(.small)
-                Text("Transcribing with Gemini…")
+                Text("Transcribing locally…")
                     .font(.callout)
                     .foregroundStyle(.secondary)
                 Spacer()
@@ -275,6 +455,10 @@ struct RecorderPanel: View {
                 // (Finder, Mail, an editor, a chat). Falls back to the copy/reveal
                 // buttons above if a target doesn't accept the drag.
                 transcriptDragHandle(url)
+
+                if !model.currentSpeakers.isEmpty {
+                    speakerChips
+                }
             }
 
         case .failed(let message):
@@ -288,15 +472,32 @@ struct RecorderPanel: View {
                         .fixedSize(horizontal: false, vertical: true)
                     Spacer()
                 }
-                if model.apiKeyIsSet {
-                    Button {
-                        model.retryTranscription()
-                    } label: {
-                        Label("Retry", systemImage: "arrow.clockwise")
-                    }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
+                Button {
+                    model.retryTranscription()
+                } label: {
+                    Label("Retry", systemImage: "arrow.clockwise")
                 }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+            }
+        }
+    }
+
+    /// One chip per speaker, in order of first speech. Renaming re-renders
+    /// `transcript.md` from `transcript.json`, and teaches the voice profile store when
+    /// profiles are enabled.
+    private var speakerChips: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("Speakers")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            HStack(spacing: 6) {
+                ForEach(model.currentSpeakers, id: \.id) { speaker in
+                    SpeakerChip(id: speaker.id, name: speaker.name) { newName in
+                        model.renameSpeaker(id: speaker.id, to: newName)
+                    }
+                }
+                Spacer(minLength: 0)
             }
         }
     }
@@ -444,7 +645,7 @@ struct RecorderPanel: View {
                     Button { model.transcribeExisting(entry) } label: {
                         Label("Transcribe", systemImage: "text.bubble")
                     }
-                    .disabled(!model.apiKeyIsSet || model.transcriptionState == .running)
+                    .disabled(model.state != .idle || model.transcriptionState == .running)
                 }
                 if let audio = entry.audioURL {
                     Button { model.copyFileToPasteboard(audio) } label: {
@@ -632,5 +833,66 @@ private struct MeetingRow: View {
         fmt.timeStyle = .short
         fmt.dateStyle = .none
         return "\(fmt.string(from: start)) – \(fmt.string(from: end))"
+    }
+}
+
+// MARK: - SpeakerChip
+
+/// A speaker's current name, click to rename.
+///
+/// Renaming is also how a voice profile is created: there is no separate enrollment
+/// step, so the correction the user would make anyway is what teaches the store.
+private struct SpeakerChip: View {
+    let id: String
+    let name: String
+    let rename: (String) -> Void
+
+    @State private var editing = false
+    @State private var draft = ""
+
+    var body: some View {
+        Button {
+            draft = name
+            editing = true
+        } label: {
+            HStack(spacing: 4) {
+                Image(systemName: id == SpeakerNaming.micSpeakerID ? "person.fill" : "person")
+                    .font(.caption2)
+                Text(name)
+                    .font(.caption)
+                    .lineLimit(1)
+            }
+            .padding(.vertical, 3)
+            .padding(.horizontal, 7)
+            .background(
+                Capsule().fill(Color.primary.opacity(0.06))
+            )
+        }
+        .buttonStyle(.plain)
+        .help("Rename \(name)")
+        .popover(isPresented: $editing) {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Rename speaker")
+                    .font(.callout.weight(.medium))
+                TextField("Name", text: $draft)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 180)
+                    .onSubmit(apply)
+                HStack {
+                    Spacer()
+                    Button("Cancel") { editing = false }
+                    Button("Apply", action: apply)
+                        .keyboardShortcut(.defaultAction)
+                }
+            }
+            .padding(12)
+        }
+    }
+
+    private func apply() {
+        let trimmed = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        rename(trimmed)
+        editing = false
     }
 }

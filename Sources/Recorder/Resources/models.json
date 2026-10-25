@@ -1,0 +1,19 @@
+[
+  {
+    "id": "llm",
+    "repository": "mlx-community/Qwen3-4B-4bit",
+    "revision": "4dcb3d101c2a062e5c1d4bb173588c54ea6c4d25",
+    "files": [
+      "README.md",
+      "added_tokens.json",
+      "config.json",
+      "merges.txt",
+      "model.safetensors",
+      "model.safetensors.index.json",
+      "special_tokens_map.json",
+      "tokenizer.json",
+      "tokenizer_config.json",
+      "vocab.json"
+    ]
+  }
+]
