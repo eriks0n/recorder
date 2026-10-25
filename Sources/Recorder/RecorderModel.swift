@@ -792,7 +792,8 @@ final class RecorderModel {
         }
         lastTranscriptText = markdown
         lastTranscriptURL = markdownURL
-        lastDocument = document
+        // Normalize dates to the persisted representation before hashing for summaries.
+        lastDocument = (try? TranscriptDocument.load(from: markdownURL.deletingLastPathComponent().appendingPathComponent("transcript.json"))) ?? document
         transcriptionState = .done(markdownURL)
         if !keepStatus {
             statusMessage = "Transcript saved (transcript.md)"

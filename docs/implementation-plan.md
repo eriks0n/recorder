@@ -8,6 +8,24 @@ Der Plan ist in zwei Stufen geteilt: **V1** liefert schnell ein im Alltag nutzba
 
 ---
 
+## Umsetzungsstand und genehmigte Abweichungen (25. Oktober 2026)
+
+Der Nutzer hat die Tests mit echten Aufnahmen auf später verschoben und ausdrücklich die Übernahme von `cjonesde/recorder` mit WhisperKit statt Parakeet/FluidAudio genehmigt. Diese Entscheidung hat Vorrang vor den ursprünglichen Modellvorgaben. V2 bleibt außerhalb des Auftrags.
+
+- Sicherheitsprüfung des ursprünglichen Quellstands vor Ausführung: dokumentiert in `docs/security-review.md`; keine Hinweise auf bösartigen Code gefunden, keine Garantie vollständiger Schwachstellenfreiheit.
+- P0: Quellprüfung, feste Bibliotheks-/Modellrevisionen und lokaler Build erledigt. Echter Modellvergleich, Download-/RAM-Messwerte und Aufnahmeprüfung bleiben offen. CLT-Umgebung statt vollständigem Xcode; macOS-27-SDK unvollständig, macOS-26.5-SDK funktioniert. Kein vorgetäuschter P0-Pass.
+- Basis: cjonesde-Fork bei f1ba832, Lizenz/Herkunft in `docs/fork-review.md`.
+- P1/P2: lokale WhisperKit-/SpeakerKit-Integration; ausdrücklich gestartete Modelldownloads; Offline-Laden ohne Tokenizer-Netzwerkfallback; beide Kanäle separat diarisiert, Wortzeitstempel und Überlappungsmarker. Modellqualität noch ungemessen.
+- P3: explizite interne/eigene Profile, Meetingnamen für externe Personen, Bereichs-/Kalender-/Modellfilter, Mindestabstand zum zweitbesten Treffer. Unbestätigte Referenzen nur im RAM; Namensvorschläge bleiben bis zur Kalibrierung deaktiviert.
+- P4: Abbruch/erneute Verarbeitung, vollständige Ergebnisgenerationen mit atomarem Zeiger, private Dateirechte, lokaler Standardordner und Synchronisationshinweis, blockweises Audiomischen. Pausen behalten die gemeinsame Zeitachse durch Stille. Hardware-/Langlaufabnahme offen.
+- P5: lokaler MLX-Adapter, Tokenbudget/Abschnitte/Konsolidierung, maximal zwei Reparaturversuche, Schema-/Beleg-/Frist-/Zuständigenprüfung, vier Exportabschnitte und separate Fehleranzeige implementiert. **MLX-Build und Inferenz sind hier noch nicht verifiziert**: Metal-Compiler fehlt. Der CLT-Build meldet diese Voraussetzung klar und behält das Transkript. Keine Cloud-Alternative.
+
+Prüfstand: 45 ausführbare Kernprüfungen bestanden (ohne echte Meetings, mit synthetischen Testtönen); Release-App gebaut, Ressourcen gebündelt und Ad-hoc-Signatur geprüft. Der geerbte XCTest-Lauf scheitert in dieser CLT-Umgebung am fehlenden XCTest-Modul und ist ausdrücklich nicht als bestanden gewertet.
+
+V1 ist damit als Implementierung fortgeschritten, aber noch nicht vollständig abgenommen. Insbesondere werden die ursprünglichen Qualitätsziele nicht als erreicht behauptet. Die aktuelle Bedienung und offenen Prüfschritte stehen im README.
+
+---
+
 ## 1. Ziel
 
 Eine native macOS-App nimmt Meetings auf, transkribiert sie lokal (Deutsch und Englisch), trennt Sprecher, erkennt bestätigte Personen in späteren Meetings wieder und erstellt eine lokale Zusammenfassung mit Aufgaben. Audio, Texte und Stimmprofile verlassen den Mac nicht. Kein eigener Server, keine Python-Laufzeit im Produkt, kein automatischer Cloud-Fallback.

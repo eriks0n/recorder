@@ -90,9 +90,7 @@ final class ModelHost<Pipe: AnyObject> {
 
         let onDisk = isDownloadedCheck(name)
         if !onDisk && !downloadIfNeeded {
-            if pipe == nil {
-                state = .notDownloaded(name)
-            }
+            state = .notDownloaded(name)
             return
         }
 

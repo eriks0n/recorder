@@ -246,7 +246,7 @@ final class SpeakerProfileStoreTests: XCTestCase {
 
         XCTAssertTrue(store.profiles.isEmpty)
         XCTAssertTrue(
-            FileManager.default.fileExists(atPath: baseURL.appendingPathComponent("profiles.json.corrupt").path),
+            (try FileManager.default.contentsOfDirectory(atPath: baseURL.path)).contains(where: { $0.hasPrefix("profiles.json.corrupt-") }),
             "the unreadable file must be kept, not silently overwritten"
         )
     }

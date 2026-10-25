@@ -97,6 +97,11 @@ struct CoreChecks {
         let pointer = folder.appendingPathComponent("current-result.json")
         try PrivateStorage.save(TranscriptRepository.Pointer(generation: "../escape"), to: pointer)
         try rejects({ _ = try TranscriptRepository.currentJSON(in: folder) }, "Result pointer traversal rejected")
+        let savedSummary = MeetingSummary(meetingID: transcript.meeting.id, transcriptHash: transcript.hash, modelVersion: "test", language: "Deutsch", content: empty)
+        try SummaryRepository.publish(savedSummary, transcript: transcript, folder: folder)
+        let summaryURL = try SummaryRepository.current(in: folder, hash: transcript.hash)
+        try check(FileManager.default.fileExists(atPath: summaryURL.path), "Published summary has a complete readable generation")
+        try rejects({ _ = try SummaryRepository.current(in: folder, hash: "outdated") }, "Stale summary cannot be opened as current")
         let raw = folder.appendingPathComponent("test-desktop.caf")
         let mic = folder.appendingPathComponent("test-mic.caf")
         func tone(_ url: URL, frequency: Double, rate: Double) throws {
