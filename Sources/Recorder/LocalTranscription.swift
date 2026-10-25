@@ -6,65 +6,6 @@ import os
 import WhisperKit
 import SpeakerKit
 
-// MARK: - Model catalog
-
-/// One selectable on-device Whisper model. All entries are multilingual
-/// (German + English included); English-only `.en` variants are deliberately
-/// excluded from the catalog.
-struct WhisperModelOption: Identifiable, Equatable {
-    /// WhisperKit variant name in the `argmaxinc/whisperkit-coreml` repo.
-    let id: String
-    let label: String
-    let detail: String
-
-    static let catalog: [WhisperModelOption] = [
-        WhisperModelOption(
-            id: "openai_whisper-tiny",
-            label: "Tiny",
-            detail: "~110 MB, fastest, lowest accuracy"
-        ),
-        WhisperModelOption(
-            id: "openai_whisper-base",
-            label: "Base",
-            detail: "~150 MB, fast, fine for quick notes"
-        ),
-        WhisperModelOption(
-            id: "openai_whisper-small_216MB",
-            label: "Small (compressed)",
-            detail: "~220 MB, good accuracy"
-        ),
-        WhisperModelOption(
-            id: "openai_whisper-small",
-            label: "Small",
-            detail: "~490 MB, good accuracy"
-        ),
-        WhisperModelOption(
-            id: "openai_whisper-large-v3-v20240930_turbo_632MB",
-            label: "Large v3 Turbo (compressed)",
-            detail: "~630 MB, best accuracy"
-        ),
-    ]
-
-    static let defaultModelID = "openai_whisper-base"
-
-    static func label(for id: String) -> String {
-        catalog.first(where: { $0.id == id })?.label ?? id
-    }
-}
-
-/// Selectable transcription languages. "auto" detects the language per window,
-/// which handles mixed German/English meetings.
-enum TranscriptionLanguage {
-    static let options: [(id: String, label: String)] = [
-        ("auto", "Auto-detect"),
-        ("de", "German"),
-        ("en", "English"),
-        ("fr", "French"),
-        ("es", "Spanish"),
-        ("it", "Italian"),
-    ]
-}
-
 // MARK: - LocalTranscriptionEngine
 
 /// On-device transcription via WhisperKit (CoreML Whisper on Apple Silicon).
@@ -209,6 +150,8 @@ final class LocalTranscriptionEngine {
             }
         }
         let (_, turns) = TranscriptAssembler.assemble(words: allWords, intervals: intervals)
+        // Cross-channel simultaneous speech also makes enrollment conservative.
+        for speaker in Set(turns.filter(\.overlap).map(\.speakerID)) { cleanClusters.removeValue(forKey: speaker) }
         let ids = Set(turns.map(\.speakerID))
         return OfflineTranscription(lines: turns.map {
             TranscriptLine(time: $0.start, text: $0.text, speaker: $0.speakerID, endTime: $0.end, channel: $0.channel.rawValue, overlap: $0.overlap)
@@ -255,7 +198,7 @@ final class LocalTranscriptionEngine {
     private func diarize(_ samples: [Float]) async throws -> ([DiarizedSpan], [Int: [Float]]) {
         do {
             let kit = try await diarizer()
-            let result = try await kit.diarize(audioArray: samples)
+            let result = try await kit.diarize(audioArray: samples, options: PyannoteDiarizationOptions(useExclusiveReconciliation: false))
             let spans = result.segments.compactMap { segment in
                 segment.speaker.speakerId.map {
                     DiarizedSpan(

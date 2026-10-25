@@ -511,9 +511,7 @@ final class SystemAudioTap {
         }
 
         // --- Honor pause gate (meters keep updating above; only the write is gated). ---
-        if paused.withLock({ $0 }) {
-            return
-        }
+        let isPaused = paused.withLock { $0 }
 
         // --- Downmix to mono and enqueue for the writer thread. ---
         // REALTIME-SAFE ONLY: no allocation, no file I/O, no `self.lock` here. We downmix into a
@@ -548,7 +546,11 @@ final class SystemAudioTap {
             let chunk = min(total - offset, chunkLimit)
 
             let mono: UnsafePointer<Float>
-            if channelCount <= 1 {
+            if isPaused, let scratch = self.scratch {
+                // Retain the shared timeline during pauses without retaining captured speech.
+                scratch.update(repeating: 0, count: chunk)
+                mono = UnsafePointer(scratch)
+            } else if channelCount <= 1 {
                 mono = UnsafePointer(channelData[0] + offset)
             } else {
                 let scratch = self.scratch!

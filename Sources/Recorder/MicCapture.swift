@@ -63,6 +63,7 @@ final class MicCapture {
 
     /// When true, the tap block computes meters but does NOT write to disk.
     private var paused = false
+    private var pauseSilence: AVAudioPCMBuffer?
 
     /// Host time (mach_absolute_time domain) of the first buffer we wrote. `nil` until
     /// the first non-paused buffer arrives.
@@ -186,6 +187,8 @@ final class MicCapture {
             self.downmixFormat = monoFormat
             self.resampler = converter
             self.resampleBuffer = scratch
+            self.pauseSilence = AVAudioPCMBuffer(pcmFormat: monoFormat, frameCapacity: Self.resampleCapacity)
+            self.pauseSilence?.floatChannelData?[0].update(repeating: 0, count: Int(Self.resampleCapacity))
         }
 
         configObserver = NotificationCenter.default.addObserver(
@@ -340,27 +343,24 @@ final class MicCapture {
 
     /// Append one canonical-rate mono buffer to disk and forward it to `onSamples`.
     private func write(_ writeBuffer: AVAudioPCMBuffer, hostTime: UInt64) {
-        let wrote: Bool = lock.withLock {
-            guard self.running, !self.paused else { return false }
+        let written: AVAudioPCMBuffer? = lock.withLock {
+            guard self.running else { return nil }
+            let payload: AVAudioPCMBuffer
+            if self.paused {
+                guard let silence = self.pauseSilence, writeBuffer.frameLength <= silence.frameCapacity else { return nil }
+                silence.frameLength = writeBuffer.frameLength
+                payload = silence
+            } else { payload = writeBuffer }
             if let file = self.file {
-                do {
-                    try file.write(from: writeBuffer)
-                } catch {
-                    self.running = false
-                    self.file = nil
-                    self.onFatalError?(error)
-                    return false
-                }
+                do { try file.write(from: payload) }
+                catch { self.running = false; self.file = nil; self.onFatalError?(error); return nil }
             }
-            if self.firstHostTime == nil {
-                self.firstHostTime = hostTime
-            }
-            self.frameCount += AVAudioFramePosition(writeBuffer.frameLength)
-            return true
+            if self.firstHostTime == nil { self.firstHostTime = hostTime }
+            self.frameCount += AVAudioFramePosition(payload.frameLength)
+            return payload
         }
-
-        if wrote, let onSamples, let mono = writeBuffer.floatChannelData?[0] {
-            onSamples(mono, Int(writeBuffer.frameLength), writeBuffer.format.sampleRate)
+        if let written, let onSamples, let mono = written.floatChannelData?[0] {
+            onSamples(mono, Int(written.frameLength), written.format.sampleRate)
         }
     }
 

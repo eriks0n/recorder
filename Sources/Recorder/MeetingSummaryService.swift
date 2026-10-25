@@ -86,7 +86,7 @@ enum SummaryValidator {
             }
             if let owner = a.owner {
                 guard !owner.isEmpty, a.evidence.contains(where: { ref in
-                    ref.quote.contains(owner) || turns[ref.turnID].map { transcript.label($0.speakerID) == owner } == true
+                    ref.quote.contains(owner) || turns[ref.turnID].map { (transcript.label($0.speakerID) == owner || $0.speakerID == owner) } == true
                 }) else { throw LocalError.message("Verantwortliche Person ist nicht belegt.") }
             }
         }

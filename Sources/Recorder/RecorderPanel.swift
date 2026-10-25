@@ -462,6 +462,7 @@ struct RecorderPanel: View {
                 if !model.currentSpeakers.isEmpty {
                     speakerChips
                     Button("Zusammenfassung erstellen / erneuern") { model.summarize() }
+                    Button("Zusammenfassung öffnen") { model.openSummary() }
                     if let status = model.summaryStatus {
                         Text(status).font(.caption).fixedSize(horizontal: false, vertical: true)
                         Button("Verarbeitung abbrechen") { model.cancelProcessing() }

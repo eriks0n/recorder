@@ -1,4 +1,6 @@
 import Foundation
+import AVFoundation
+import CoreAudio
 
 @main
 struct CoreChecks {
@@ -12,7 +14,7 @@ struct CoreChecks {
         try check(false, message)
     }
     @MainActor
-    static func main() throws {
+    static func main() async throws {
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent("recorder-core-\(UUID().uuidString)")
         try PrivateStorage.directory(folder)
         defer { try? FileManager.default.removeItem(at: folder) }
@@ -57,7 +59,8 @@ struct CoreChecks {
         try check(store.profiles.count == 1, "Explicit internal enrollment persists")
         try store.enrollInternal(name: "Anna", clusterID: "s1", pendingID: pending.id, meeting: meeting, category: "internal", email: "anna@company.test")
         try check(store.profiles.first?.centroids.count == 1, "Repeated confirmation must not duplicate references")
-        try check((try FileManager.default.attributesOfItem(atPath: storeFolder.path)[.posixPermissions] as? Int) == 0o700, "Private directory permissions")
+        let permissions = try FileManager.default.attributesOfItem(atPath: storeFolder.path)[.posixPermissions] as? Int
+        try check(permissions == 0o700, "Private directory permissions")
         try store.deleteAllVoiceData()
         try check(!FileManager.default.fileExists(atPath: storeFolder.path), "Delete all voice data removes persisted embeddings")
         try check(store.loadPending(id: pending.id) == nil, "Delete clears in-memory references")
@@ -84,7 +87,7 @@ struct CoreChecks {
         let originalHash = transcript.hash
         transcript.assignments = [.init(id: "s1", name: "Anna", status: .confirmed)]
         try check(transcript.hash != originalHash, "Identity confirmation invalidates old summary hash")
-        let document = TranscriptDocument(meetingTitle: "Test", attendees: [], startedAt: Date(), audioName: "audio.m4a", model: "test", isPolished: true, lines: [.init(time: 1, text: "Hallo", speakerID: "s1")], speakerNames: ["s1": "Sprecher 1"])
+        let document = TranscriptDocument(meetingTitle: "Test", attendees: [], startedAt: Date(timeIntervalSince1970: 0), audioName: "audio.m4a", model: "test", isPolished: true, lines: [.init(time: 1, text: "Hallo", speakerID: "s1")], speakerNames: ["s1": "Sprecher 1"])
         let exported = try TranscriptRepository.publish(document, folder: folder)
         try check(FileManager.default.fileExists(atPath: exported.path), "Published generation has a complete Markdown file")
         let loaded = try TranscriptDocument.load(from: folder.appendingPathComponent("transcript.json"))
@@ -94,6 +97,46 @@ struct CoreChecks {
         let pointer = folder.appendingPathComponent("current-result.json")
         try PrivateStorage.save(TranscriptRepository.Pointer(generation: "../escape"), to: pointer)
         try rejects({ _ = try TranscriptRepository.currentJSON(in: folder) }, "Result pointer traversal rejected")
+        let raw = folder.appendingPathComponent("test-desktop.caf")
+        let mic = folder.appendingPathComponent("test-mic.caf")
+        func tone(_ url: URL, frequency: Double, rate: Double) throws {
+            let format = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: rate, channels: 1, interleaved: false)!
+            let frames = Int(rate / 5)
+            let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(frames))!
+            buffer.frameLength = AVAudioFrameCount(frames)
+            for i in 0..<frames { buffer.floatChannelData![0][i] = Float(sin(Double(i) * 2 * .pi * frequency / rate)) * 0.25 }
+            let file = try AVAudioFile(forWriting: url, settings: format.settings)
+            try file.write(from: buffer)
+        }
+        print("Checking audio encoding and resampling", terminator: "\n"); fflush(stdout)
+        try tone(raw, frequency: 440, rate: 16000)
+        try tone(mic, frequency: 880, rate: 48000)
+        let mix = folder.appendingPathComponent("audio.m4a")
+        try StereoMixer.mix(desktopURL: raw, micURL: mic, desktopResult: .init(), micResult: .init(), outputURL: mix)
+        print("Checking encoded audio", terminator: "\n"); fflush(stdout)
+        let decoded = try AVAudioFile(forReading: mix)
+        try check(decoded.processingFormat.channelCount == 2, "Mixed AAC is stereo")
+        try check(decoded.processingFormat.sampleRate == 48000, "Both sources are resampled to the common clock")
+        try check(decoded.length >= 8000 && decoded.length < 20000, "Mixed duration is bounded and plausible")
+        let samples = AVAudioPCMBuffer(pcmFormat: decoded.processingFormat, frameCapacity: AVAudioFrameCount(decoded.length))!
+        try decoded.read(into: samples)
+        for channel in 0..<2 {
+            let energy = (0..<Int(samples.frameLength)).reduce(0.0) { $0 + Double(samples.floatChannelData![channel][$1] * samples.floatChannelData![channel][$1]) }
+            try check(energy > 1, "Each source survives in its channel")
+        }
+        let complete = try Data(contentsOf: mix)
+        try rejects({ try StereoMixer.mix(desktopURL: folder.appendingPathComponent("missing-a"), micURL: folder.appendingPathComponent("missing-b"), desktopResult: .init(), micResult: .init(), outputURL: mix) }, "Empty input cannot replace a complete mix")
+        let preserved = try Data(contentsOf: mix)
+        try check(preserved == complete, "Failed mixing preserves the previous complete file")
+        let offsets = StereoMixer.leadingSilence(100, 100 + AudioConvertNanosToHostTime(100_000_000))
+        try check(abs(offsets.1 - 4800) <= 1 && offsets.0 == 0, "Capture skew maps to the shared timeline")
+        let validPointer = TranscriptRepository.Pointer(generation: UUID().uuidString)
+        try PrivateStorage.save(validPointer, to: pointer)
+        let task = Task { @MainActor in _ = try TranscriptRepository.publish(document, folder: folder) }
+        task.cancel()
+        do { try await task.value; try check(false, "Cancelled publication must fail") } catch { count += 1 }
+        let unchanged = try PrivateStorage.read(TranscriptRepository.Pointer.self, from: pointer)
+        try check(unchanged.generation == validPointer.generation, "Cancellation preserves the last published generation")
         print("Passed \(count) core checks")
     }
 }

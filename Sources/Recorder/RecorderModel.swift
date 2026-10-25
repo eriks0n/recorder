@@ -113,6 +113,7 @@ final class RecorderModel {
     @ObservationIgnored private var processingTask: Task<Void, Never>?
     @ObservationIgnored private var downloadTask: Task<Void, Never>?
     @ObservationIgnored private var processingID = UUID()
+    @ObservationIgnored private var recordingGeneration = UUID()
     @ObservationIgnored private var referencePlayer: AVAudioPlayer?
     @ObservationIgnored private var playbackTask: Task<Void, Never>?
 
@@ -249,6 +250,8 @@ final class RecorderModel {
         guard state == .idle else { return }
 
         cancelProcessing()
+        recordingGeneration = UUID()
+        lastDocument = nil
         speakerStore.clearPending()
         let mode = audioHandlingMode
         guard !mode.producesNothing(liveTranscriptionEnabled: liveTranscriptionEnabled) else {
@@ -417,6 +420,7 @@ final class RecorderModel {
         state = .idle
 
         let mode = activeMode
+        let recordingGeneration = self.recordingGeneration
         let folderURL = session.folderURL
         let startedAt = session.startedAt
         let meetingTitle = activeMeeting?.title ?? session.meetingTitle
@@ -452,6 +456,7 @@ final class RecorderModel {
                     self.refreshRecordings()
                     return
                 }
+                guard self.recordingGeneration == recordingGeneration else { return }
                 self.writeLiveTranscript(liveResult.lines, pending: pending, keepStatus: true)
                 self.statusMessage = "Transcript saved, no audio kept"
             }
@@ -492,7 +497,7 @@ final class RecorderModel {
             await MainActor.run { [weak self] in
                 guard let self else { return }
                 self.refreshRecordings()
-                guard self.state == .idle else { return }
+                guard self.state == .idle, self.recordingGeneration == recordingGeneration else { return }
                 self.lastTranscription = pending
                 self.statusMessage = mixError == nil
                     ? "Saved \(outputURL.lastPathComponent)"
@@ -511,7 +516,7 @@ final class RecorderModel {
 
             await MainActor.run { [weak self] in
                 guard let self else { return }
-                guard self.state == .idle else { return }
+                guard self.state == .idle, self.recordingGeneration == recordingGeneration else { return }
                 if mixError == nil, mode.runsPolishPass {
                     self.startTranscription(pending)
                 } else if let liveResult, !liveResult.isEmpty, liveResult.complete {
@@ -772,6 +777,11 @@ final class RecorderModel {
         pending: PendingTranscription,
         keepStatus: Bool
     ) {
+        var document = document
+        document.schemaVersion = 1
+        if document.meetingRecord == nil {
+            document.meetingRecord = (try? PrivateStorage.read(MeetingRecord.self, from: pending.folderURL.appendingPathComponent("meeting.json"))) ?? MeetingRecord(startedAt: pending.startedAt, title: pending.meetingTitle)
+        }
         let markdown = document.renderMarkdown()
         let markdownURL: URL
         do {
@@ -823,6 +833,20 @@ final class RecorderModel {
         let panel = NSOpenPanel(); panel.canChooseDirectories = true; panel.canChooseFiles = false; panel.canCreateDirectories = true
         if panel.runModal() == .OK, let url = panel.url { recordingPath = url.path; refreshRecordings() }
     }
+    var customerScopeSuggestion: String? {
+        guard let meeting = currentMeeting else { return nil }
+        let internalDomains = Set(speakerStore.profiles.compactMap { $0.email?.split(separator: "@").last.map(String.init) })
+        let publicDomains: Set<String> = ["gmail.com", "outlook.com", "hotmail.com", "icloud.com", "gmx.de", "web.de", "yahoo.com"]
+        let domains = Set(meeting.attendeeEmails.compactMap { $0.lowercased().split(separator: "@").last.map(String.init) })
+            .subtracting(internalDomains).subtracting(publicDomains)
+        return domains.count == 1 ? domains.first : nil
+    }
+    func openSummary() {
+        guard let pending = lastTranscription else { return }
+        guard let document = lastDocument else { return }
+        do { NSWorkspace.shared.open(try SummaryRepository.current(in: pending.folderURL, hash: document.summaryInput.hash)) }
+        catch { summaryStatus = error.localizedDescription }
+    }
     var synchronizedFolderWarning: Bool {
         let path = (RecordingsLibrary.recordingsRoot()?.resolvingSymlinksInPath().path ?? "").lowercased()
         return ["mobile documents", "clouddocs", "cloudstorage", "onedrive", "dropbox", "google drive"].contains { path.contains($0) }
@@ -866,8 +890,7 @@ final class RecorderModel {
             }
             try Task.checkCancellation()
             guard processingID == operation, lastDocument == document else { return }
-            try PrivateStorage.save(result, to: pending.folderURL.appendingPathComponent("summary.json"))
-            try PrivateStorage.write(Data(result.markdown(transcript: input).utf8), to: pending.folderURL.appendingPathComponent("summary.md"))
+            try SummaryRepository.publish(result, transcript: input, folder: pending.folderURL)
             summaryStatus = "Zusammenfassung gespeichert"
         } catch is CancellationError { if processingID == operation { summaryStatus = "Zusammenfassung abgebrochen" } }
         catch { if processingID == operation { summaryStatus = error.localizedDescription } }
@@ -879,7 +902,9 @@ final class RecorderModel {
             lastDocument = try TranscriptDocument.load(from: entry.folderURL.appendingPathComponent("transcript.json"))
             lastTranscriptText = lastDocument?.renderMarkdown(); lastTranscriptURL = url
             lastTranscription = PendingTranscription(audioURL: entry.audioURL, folderURL: entry.folderURL, meetingTitle: entry.title, attendees: [], startedAt: entry.date)
-            transcriptionState = .done(url)
+            if let document = lastDocument, document.meetingRecord == nil, let pending = lastTranscription {
+                writeTranscript(document: document, pending: pending, keepStatus: false)
+            } else { transcriptionState = .done(url) }
         } catch { statusMessage = "Altes Markdown-Transkript: bitte zur Bearbeitung erneut verarbeiten." }
     }
 

@@ -36,3 +36,10 @@ profiles.json
 *.safetensors
 *.mlmodelc/
 *.mlpackage/
+
+# Meeting metadata and complete result generations
+meeting.json
+current-result.json
+current-summary.json
+Results/
+Summaries/

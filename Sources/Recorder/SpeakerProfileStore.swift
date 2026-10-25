@@ -85,8 +85,7 @@ final class SpeakerProfileStore {
     /// Keep an unreadable file instead of overwriting it, so a decoding bug cannot
     /// destroy every profile the user built.
     private func quarantineProfiles() {
-        let corrupt = baseURL.appendingPathComponent("profiles.json.corrupt")
-        try? FileManager.default.removeItem(at: corrupt)
+        let corrupt = baseURL.appendingPathComponent("profiles.json.corrupt-\(UUID().uuidString)")
         try? FileManager.default.moveItem(at: profilesURL, to: corrupt)
     }
 
@@ -199,6 +198,11 @@ final class SpeakerProfileStore {
               !cluster.vector.isEmpty, cluster.vector.allSatisfy(\.isFinite),
               !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw LocalError.message("Kein geeigneter sauberer Referenzabschnitt verfügbar. Bitte nur für dieses Meeting benennen.") }
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let previous = cluster.appliedProfileID,
+           let profile = profiles.first(where: { $0.id == previous }),
+           profile.name != trimmed || profile.scope != meeting.scope || profile.category != category {
+            try retract(centroidAddedAt: pending.createdAt, from: previous)
+        }
         let vector = VoiceCentroid(vector: cluster.vector, sampleSeconds: cluster.speechSeconds, addedAt: pending.createdAt)
         if let i = profiles.firstIndex(where: { $0.name == trimmed && $0.scope == meeting.scope && $0.category == category && $0.embeddingVersion == SpeakerNaming.embeddingVersion }) {
             if !profiles[i].centroids.contains(where: { $0.addedAt == vector.addedAt }) { profiles[i].appendCentroid(vector) }
@@ -209,6 +213,9 @@ final class SpeakerProfileStore {
             profiles.append(profile)
         }
         try save()
+        var updated = pending
+        updated.clusters[clusterID]?.appliedProfileID = profiles.first(where: { $0.name == trimmed && $0.scope == meeting.scope && $0.category == category && $0.embeddingVersion == SpeakerNaming.embeddingVersion })?.id
+        pendingMemory[pendingID] = updated
     }
     func renameProfile(_ id: UUID, to name: String) throws {
         guard !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
@@ -224,13 +231,16 @@ final class SpeakerProfileStore {
         pendingDirectory.appendingPathComponent("\(id).json")
     }
 
+    private static func safeID(_ id: String) -> Bool {
+        !id.isEmpty && id.count <= 80 && id.unicodeScalars.allSatisfy { CharacterSet.alphanumerics.contains($0) || $0 == "-" || $0 == "_" }
+    }
     func writePending(_ pending: PendingSpeakers) throws {
-        guard UUID(uuidString: pending.id) != nil else { throw LocalError.message("Ungültige Sprecherreferenz.") }
+        guard Self.safeID(pending.id) else { throw LocalError.message("Ungültige Sprecherreferenz.") }
         pendingMemory[pending.id] = pending
     }
 
     func loadPending(id: String) -> PendingSpeakers? {
-        guard UUID(uuidString: id) != nil else { return nil }
+        guard Self.safeID(id) else { return nil }
         return pendingMemory[id]
     }
 
@@ -239,6 +249,7 @@ final class SpeakerProfileStore {
     /// Drop pending centroids nobody named. Biometric data should not outlive its
     /// purpose, and an unnamed cluster has none after a month.
     func prunePending(olderThan lifetime: TimeInterval = 60 * 60 * 24 * 30, now: Date = Date()) {
+        pendingMemory = pendingMemory.filter { now.timeIntervalSince($0.value.createdAt) <= lifetime }
         guard let entries = try? FileManager.default.contentsOfDirectory(
             at: pendingDirectory,
             includingPropertiesForKeys: nil

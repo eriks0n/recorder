@@ -10,9 +10,8 @@ enum TranscriptRepository {
         return folder.appendingPathComponent("Results/\(pointer.generation)/transcript.json")
     }
     static func publish(_ document: TranscriptDocument, folder: URL) throws -> URL {
-        let generation = UUID().uuidString, directory = folder.appendingPathComponent("Results/\(UUID().uuidString)")
-        // Use one identifier for the directory and publication pointer.
-        let target = directory.deletingLastPathComponent().appendingPathComponent(generation)
+        let generation = UUID().uuidString
+        let target = folder.appendingPathComponent("Results/\(generation)")
         try PrivateStorage.directory(target)
         var committed = false
         defer { if !committed { try? FileManager.default.removeItem(at: target) } }

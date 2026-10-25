@@ -23,6 +23,9 @@ struct LocalProcessingPreferences: View {
                     Label("Dieser Ordner könnte synchronisiert werden. Für ausschließlich lokale Daten bitte einen lokalen Ordner wählen.", systemImage: "exclamationmark.triangle")
                 }
                 TextField("Kundenbereich", text: $model.customerScope)
+                if let proposal = model.customerScopeSuggestion {
+                    Button("Kalendervorschlag übernehmen: \(proposal)") { model.customerScope = proposal }
+                }
                 Text("Vor der Aufnahme bestätigen. Ohne Zuordnung: default. Profile werden nur innerhalb dieses Bereichs verglichen.").font(.caption)
             }
             Section("Zusammenfassung") {

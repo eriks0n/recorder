@@ -63,19 +63,14 @@ enum VoiceMatching {
     static func cosineDistance(_ lhs: [Float], _ rhs: [Float]) -> Float {
         guard lhs.count == rhs.count, !lhs.isEmpty, lhs.allSatisfy(\.isFinite), rhs.allSatisfy(\.isFinite) else { return 1.0 }
 
-        let length = vDSP_Length(lhs.count)
-        var dot: Float = 0
-        var lhsSquares: Float = 0
-        var rhsSquares: Float = 0
-        vDSP_dotpr(lhs, 1, rhs, 1, &dot, length)
-        vDSP_svesq(lhs, 1, &lhsSquares, length)
-        vDSP_svesq(rhs, 1, &rhsSquares, length)
-
-        let lhsMagnitude = sqrt(lhsSquares)
-        let rhsMagnitude = sqrt(rhsSquares)
-        guard lhsMagnitude > 0, rhsMagnitude > 0 else { return 1.0 }
-
-        return max(0, min(2, 1 - dot / (lhsMagnitude * rhsMagnitude)))
+        // Double accumulation prevents Float overflow from turning invalid magnitudes into a perfect match.
+        let dot = zip(lhs, rhs).reduce(0.0) { $0 + Double($1.0) * Double($1.1) }
+        let l = sqrt(lhs.reduce(0.0) { $0 + Double($1) * Double($1) })
+        let r = sqrt(rhs.reduce(0.0) { $0 + Double($1) * Double($1) })
+        guard l > 0, r > 0, l.isFinite, r.isFinite else { return 1 }
+        let distance = 1 - dot / (l * r)
+        guard distance.isFinite else { return 1 }
+        return Float(max(0, min(2, distance)))
     }
 
     /// Closest centroid across every profile. Ties resolve to the lowest profile id so

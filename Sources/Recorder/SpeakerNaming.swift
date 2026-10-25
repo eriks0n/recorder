@@ -61,7 +61,7 @@ enum SpeakerNaming {
                     let distance = VoiceMatching.cosineDistance(evidence.centroid, centroid.vector)
                     if best == nil || distance < best! { best = distance }
                 }
-                if let best, best <= matchDistance {
+                if let best {
                     candidates.append((id, profile.id, best))
                 }
             }
@@ -79,7 +79,7 @@ enum SpeakerNaming {
         var takenClusters: Set<String> = []
         var takenProfiles: Set<UUID> = []
         for candidate in candidates {
-            guard !ambiguous.contains(candidate.clusterID), !takenClusters.contains(candidate.clusterID),
+            guard candidate.distance <= matchDistance, !ambiguous.contains(candidate.clusterID), !takenClusters.contains(candidate.clusterID),
                   !takenProfiles.contains(candidate.profileID),
                   let profile = profiles.first(where: { $0.id == candidate.profileID }) else { continue }
             takenClusters.insert(candidate.clusterID)
