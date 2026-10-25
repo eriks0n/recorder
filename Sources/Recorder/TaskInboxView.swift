@@ -22,6 +22,7 @@ struct TaskInboxView: View {
     @State private var filter = "open"
     @State private var myName = ""
     @State private var confirmSend = false
+    init(selection: UUID? = nil) { _selected = State(initialValue: selection) }
     var drafts: [TaskDraft] {
         model.taskInbox.data.drafts.filter {
             switch filter {
@@ -88,7 +89,7 @@ struct TaskInboxView: View {
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
             }
-        }.padding(16).onAppear { myName = model.taskInbox.data.myName }
+        }.padding(16).background(Color(nsColor: .windowBackgroundColor)).onAppear { myName = model.taskInbox.data.myName }
         .confirmationDialog("Ausgewählte Aufgaben an Todoist übertragen?", isPresented: $confirmSend) {
             Button("\(model.selectedTasks.count) Aufgaben übertragen") { model.sendTasksToTodoist() }
             Button("Abbrechen", role: .cancel) {}
@@ -111,6 +112,7 @@ struct TaskDraftEditor: View {
                     Text(warning).font(.caption).foregroundStyle(.orange)
                     Toggle("Geprüft: Dies ist eine zusätzliche Aufgabe", isOn: Binding(get: { draft.duplicateApproved == true }, set: { draft.duplicateApproved = $0 }))
                 }
+                if !current.locked, let error = current.exportError { Text(error).font(.caption).foregroundStyle(.orange) }
                 TextField("Aufgabe", text: $draft.title)
                 Text("Genannte Person: " + (current.ownerName ?? "Nicht zugeordnet")).font(.caption)
                 Picker("Zuständigkeit", selection: $draft.responsibility) {

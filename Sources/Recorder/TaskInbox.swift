@@ -81,7 +81,7 @@ enum MeetingDateResolver {
             else {
                 let f = DateFormatter(); f.calendar = cal; f.timeZone = timezone; f.locale = Locale(identifier: "de_DE"); f.isLenient = false
                 f.dateFormat = "dd.MM.yyyy"
-                date = f.date(from: text)
+                if text.range(of: #"^\d{2}\.\d{2}\.\d{4}$"#, options: .regularExpression) != nil { date = f.date(from: text) }
             }
         }
         guard let date else { return nil }

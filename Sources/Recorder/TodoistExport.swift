@@ -64,6 +64,10 @@ struct TodoistSyncCommand: Codable {
 private final class TodoistNoRedirect: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
     func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse, newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void) { completionHandler(nil) }
 }
+struct TodoistRejected: LocalizedError {
+    var message: String
+    var errorDescription: String? { message }
+}
 struct TodoistClient {
     typealias Transport = (URLRequest) async throws -> (Data, HTTPURLResponse)
     var transport: Transport
@@ -92,7 +96,9 @@ struct TodoistClient {
         let (data, response) = try await transport(request)
         guard (200...299).contains(response.statusCode) else {
             let advice = response.statusCode == 401 ? "Zugangsdaten prüfen." : response.statusCode == 429 ? "Später erneut versuchen." : "Projekt und Berechtigungen prüfen."
-            throw LocalError.message("Todoist antwortet mit Status \(response.statusCode). \(advice)")
+            let message = "Todoist antwortet mit Status \(response.statusCode). \(advice)"
+            if [400, 401, 403, 404, 429].contains(response.statusCode) { throw TodoistRejected(message: message) }
+            throw LocalError.message(message)
         }
         return data
     }
@@ -114,7 +120,11 @@ struct TodoistClient {
         let command = try JSONDecoder().decode(TodoistSyncCommand.self, from: frozenPayload)
         struct Body: Encodable { var commands: [TodoistSyncCommand] }
         let result = try await send(path: "sync", token: token, body: JSONEncoder().encode(Body(commands: [command])))
-        guard let json = try JSONSerialization.jsonObject(with: result) as? [String: Any],
+        let json = try JSONSerialization.jsonObject(with: result) as? [String: Any]
+        if let statuses = json?["sync_status"] as? [String: Any], let rejection = statuses[command.uuid] as? [String: Any], rejection["error_code"] != nil {
+            throw TodoistRejected(message: "Todoist hat diese Aufgabe abgelehnt. Bitte Projekt, Mitglied und Termine prüfen; der Entwurf kann korrigiert werden.")
+        }
+        guard let json,
               let status = json["sync_status"] as? [String: Any], status[command.uuid] as? String == "ok",
               let mapping = json["temp_id_mapping"] as? [String: String], let id = mapping[command.temp_id], !id.isEmpty else {
             throw LocalError.message("Todoist hat den Auftrag nicht eindeutig bestätigt. Der gespeicherte Versandauftrag bleibt für einen erneuten Versuch erhalten.")
@@ -167,6 +177,13 @@ extension TaskInbox {
             guard let i = data.drafts.firstIndex(where: { $0.id == id }), data.drafts[i].attemptID != nil else { throw LocalError.message("Versandauftrag fehlt.") }
             data.drafts[i].exportError = error
             if let remoteID { data.drafts[i].remoteID = remoteID; data.drafts[i].exportChannel = "Todoist" }
+        }
+    }
+    func rejectSend(_ id: UUID, error: String) throws {
+        try edit { data in
+            guard let i = data.drafts.firstIndex(where: { $0.id == id }), data.drafts[i].exportChannel == nil else { return }
+            data.drafts[i].attemptID = nil; data.drafts[i].frozenPayload = nil
+            data.drafts[i].reviewed = false; data.drafts[i].selected = false; data.drafts[i].exportError = error
         }
     }
     func select(_ id: UUID, value: Bool) throws {

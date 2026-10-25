@@ -18,9 +18,11 @@ final class RecorderModel {
         self.taskInbox = taskInbox ?? TaskInbox()
         self.processJobOverride = processJob
         // MenuBarExtra content is lazy. Initialize scheduled cleanup even when the panel is never opened.
-        appLaunchObserver = NotificationCenter.default.addObserver(forName: NSApplication.didFinishLaunchingNotification,
-                                                                   object: nil, queue: .main) { [weak self] _ in
-            Task { @MainActor [weak self] in self?.onAppear() }
+        if processingQueue == nil && taskInbox == nil && processJob == nil {
+            appLaunchObserver = NotificationCenter.default.addObserver(forName: NSApplication.didFinishLaunchingNotification,
+                                                                       object: nil, queue: .main) { [weak self] _ in
+                Task { @MainActor [weak self] in self?.onAppear() }
+            }
         }
     }
     deinit {

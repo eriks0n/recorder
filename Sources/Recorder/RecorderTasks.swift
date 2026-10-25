@@ -113,7 +113,8 @@ extension RecorderModel {
                         let remote = try await client.create(frozenPayload: payload, token: token)
                         try taskInbox.recordSend(id, remoteID: remote); count += 1
                     } catch {
-                        try taskInbox.recordSend(id, remoteID: nil, error: error.localizedDescription)
+                        if error is TodoistRejected { try taskInbox.rejectSend(id, error: error.localizedDescription) }
+                        else { try taskInbox.recordSend(id, remoteID: nil, error: error.localizedDescription) }
                         throw error
                     }
                 }

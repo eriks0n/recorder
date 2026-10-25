@@ -106,4 +106,24 @@ import XCTest
         do { _ = try await client.choices("projects", token: "secret"); XCTFail() }
         catch { XCTAssertFalse(error.localizedDescription.contains("sensitive")); XCTAssertFalse(error.localizedDescription.contains("secret")) }
     }
+    func testDefiniteServerRejectionReopensDraftButUncertainResponseDoesNot() async throws {
+        let inbox = TaskInbox(url: root.appendingPathComponent("inbox.json")), d = draft()
+        try inbox.edit { $0.drafts = [d] }
+        let payload = try inbox.prepareSend(d.id)
+        let command = try JSONDecoder().decode(TodoistSyncCommand.self, from: payload)
+        let client = TodoistClient { request in
+            let body = try JSONSerialization.data(withJSONObject: ["sync_status": [command.uuid: ["error_code": 12, "error": "private server detail"]]])
+            return (body, HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+        }
+        do { _ = try await client.create(frozenPayload: payload, token: "synthetic"); XCTFail() }
+        catch {
+            XCTAssertTrue(error is TodoistRejected); XCTAssertFalse(error.localizedDescription.contains("private server"))
+            try inbox.rejectSend(d.id, error: error.localizedDescription)
+        }
+        XCTAssertFalse(inbox.data.drafts[0].locked); XCTAssertFalse(inbox.data.drafts[0].reviewed)
+        XCTAssertThrowsError(try inbox.prepareSend(d.id))
+        var edited = inbox.data.drafts[0]; edited.projectID = "corrected"; try inbox.save(edited); try inbox.review(d.id)
+        XCTAssertNotEqual(try inbox.prepareSend(d.id), payload)
+    }
+
 }
