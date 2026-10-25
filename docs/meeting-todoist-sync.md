@@ -4,7 +4,7 @@ Aktualisierung vom 25. Oktober 2026. Umsetzung auf `codex/meeting-task-inbox`.
 
 ## Bedienung
 
-1. **Settings → Todoist** öffnen, den persönlichen API-Key im verdeckten Eingabefeld eintragen und **Verbindung prüfen und sicher speichern** klicken. Der Key wird vor dem Speichern gegen das Todoist-Konto geprüft. Nur bei Erfolg wird er im macOS-Schlüsselbund gespeichert; ein falscher neuer Key überschreibt keinen vorhandenen funktionierenden Zugang. Die Eingabe wird anschließend geleert. Ein bereits gespeicherter Key wird niemals im Klartext angezeigt.
+1. **Settings → Todoist** öffnen, den persönlichen API-Key im sichtbaren umrandeten Passwortfeld eintragen (tippen, ⌘V oder **Einfügen**) und **Verbindung prüfen und sicher speichern** klicken. Der Key wird vor dem Speichern gegen das Todoist-Konto geprüft. Nur bei Erfolg wird er im macOS-Schlüsselbund gespeichert; ein falscher neuer Key überschreibt keinen vorhandenen funktionierenden Zugang. Die Eingabe wird anschließend geleert. Ein bereits gespeicherter Key wird niemals im Klartext angezeigt.
 2. **Aufgaben-Inbox öffnen…**, anschließend das gewünschte **Meeting** wählen. „Alle Meetings ansehen“ dient der Übersicht; daraus wird kein gemischter Stapel synchronisiert.
 3. **Projekte und Tags laden** ruft die eigenen Todoist-Projekte, Abschnitte und Tags ab. **# Projekt für dieses Meeting** wählen; **@ Tags** aus der Liste ergänzen oder mit Kommas eingeben. Ein führendes `@` wird entfernt, doppelte Tags werden zusammengeführt. Kein Projekt bedeutet Todoist-Eingang; keine Tags ist ebenfalls zulässig.
 4. Unter **Ich bin im Meeting…** den eigenen Sprecher auswählen. Bei mehreren Sprecher-IDs derselben Person können mehrere markiert werden. **Für Meeting übernehmen** speichert Projekt, Tags und Sprecherzuordnung dauerhaft. Die Vorgaben gelten für alle noch nicht exportierten Aufgaben dieses Meetings und später neu erkannte Aufgaben. Andere Meetings, bereits gesendete Aufgaben und gesetzte Termine bleiben unverändert.
@@ -38,3 +38,7 @@ Ein tatsächlicher Kontotest mit dem vom Nutzer eingetragenen API-Key bleibt erf
 Technische Grundlage: [aktuelle Todoist API v1](https://developer.todoist.com/api/v1/).
 
 Prüfstand: **197 XCTest-Tests, 12 bewusst ausgelassen, 0 Fehler**; darunter 18 neue Meeting-/Todoist-Policy-Tests. **56 zusätzliche Kernprüfungen bestanden.** Die vollständige Suite enthält die lokale LLM-Prüfung und die synthetische Oberflächendarstellung.
+
+### Korrektur der Schlüsseleingabe
+
+Das zunächst randlose SwiftUI-Feld wurde durch ein klar umrandetes natives macOS-Passwortfeld mit Einfügen-Button ersetzt. ⌘V und ⌘A funktionieren direkt über das Feld, auch ohne Bearbeiten-Menü der Menüleisten-App. Der Inhalt bleibt verdeckt und wird weiterhin nur nach Verbindungsprüfung im Schlüsselbund gespeichert. Vier neue UI-Tests prüfen echte Texteingabe und Bindung, Tastatur-Einfügen über das Fenster, deaktivierte Eingabe ohne Zwischenablagenzugriff und die Darstellung im dunklen Modus. Zusammen mit den Meeting-/Todoist-Tests: 34 Tests ohne Fehler. Alle Eingabewerte sind synthetisch; Tests lesen oder verändern die Benutzerzwischenablage nicht.
