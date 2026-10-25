@@ -9,7 +9,7 @@ enum PrivateStorage {
     }
     static func write(_ data: Data, to url: URL) throws {
         try directory(url.deletingLastPathComponent())
-        try data.write(to: url, options: [.atomic, .completeFileProtectionUnlessOpen])
+        try data.write(to: url, options: [.atomic])
         try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
     }
     static func save<T: Encodable>(_ value: T, to url: URL) throws {

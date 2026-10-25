@@ -20,6 +20,18 @@ enum Preferences {
         static let voiceProfiles       = "voiceProfilesEnabled"
     }
 
+    static var recordingPath: String {
+        get { defaults.string(forKey: "recordingPath") ?? "" }
+        set { defaults.set(newValue, forKey: "recordingPath") }
+    }
+    static var autoSummary: Bool {
+        get { defaults.bool(forKey: "autoSummary") }
+        set { defaults.set(newValue, forKey: "autoSummary") }
+    }
+    static var summaryLanguage: String {
+        get { defaults.string(forKey: "summaryLanguage") ?? "Deutsch" }
+        set { defaults.set(newValue, forKey: "summaryLanguage") }
+    }
     /// Seconds of two-channel silence before a recording auto-stops. Default 300 (5 min).
     static var silenceTimeout: TimeInterval {
         get { defaults.object(forKey: Key.silenceTimeout) == nil ? 300 : defaults.double(forKey: Key.silenceTimeout) }
@@ -71,7 +83,7 @@ enum Preferences {
     /// Whether the transcript streams live into the panel while recording.
     /// Default true.
     static var liveTranscription: Bool {
-        get { defaults.object(forKey: Key.liveTranscription) == nil ? true : defaults.bool(forKey: Key.liveTranscription) }
+        get { defaults.object(forKey: Key.liveTranscription) == nil ? false : defaults.bool(forKey: Key.liveTranscription) }
         set { defaults.set(newValue, forKey: Key.liveTranscription) }
     }
 

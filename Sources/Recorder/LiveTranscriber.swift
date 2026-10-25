@@ -339,8 +339,8 @@ final class LiveTranscriber {
             desktop += desktopEnvelope[k]
             mic += micEnvelope[k]
         }
-        if mic > desktop * Self.channelDominanceRatio { return "You" }
-        if desktop > mic * Self.channelDominanceRatio { return "Them" }
+        if mic > desktop * Self.channelDominanceRatio { return "Mikrofon" }
+        if desktop > mic * Self.channelDominanceRatio { return "Desktop" }
         return nil
     }
 

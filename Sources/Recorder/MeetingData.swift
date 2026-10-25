@@ -2,7 +2,7 @@ import Foundation
 import CryptoKit
 
 enum AudioChannel: String, Codable { case desktop, microphone }
-struct MeetingRecord: Codable, Identifiable {
+struct MeetingRecord: Codable, Identifiable, Equatable {
     var schemaVersion = 1
     var id = UUID()
     var scope = "default"
@@ -47,7 +47,7 @@ struct MeetingTranscript: Codable {
     // Embeddings remain in memory until explicit enrollment, never in transcript exports.
     var hash: String {
         let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
-        return SHA256.hash(data: (try? encoder.encode(turns)) ?? Data()).map { String(format: "%02x", $0) }.joined()
+        return SHA256.hash(data: (try? encoder.encode(self)) ?? Data()).map { String(format: "%02x", $0) }.joined()
     }
     func label(_ speakerID: String) -> String {
         if let a = assignments.first(where: { $0.id == speakerID }), a.status == .confirmed, let name = a.name { return name }

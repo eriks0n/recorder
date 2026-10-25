@@ -2,6 +2,7 @@ import Foundation
 import Observation
 import AppKit
 import os
+import AVFoundation
 
 /// Owns every component and wires their callbacks. The model is @MainActor;
 /// audio-thread callbacks hop to main via DispatchQueue.main.async before touching state.
@@ -52,7 +53,7 @@ final class RecorderModel {
             let name = whisperModel
             Task { [weak self] in
                 guard let self else { return }
-                await self.live.loadModel(name, downloadIfNeeded: true)
+                await self.live.loadModel(name, downloadIfNeeded: false)
                 if self.live.loadFailureMessage != nil,
                    let loaded = self.live.loadedModelName,
                    self.whisperModel == name, loaded != name {
@@ -100,6 +101,20 @@ final class RecorderModel {
 
     /// The most recent recordings on disk (loaded at launch + after changes).
     var recentRecordings: [RecordingEntry] = []
+
+    var customerScope = "default"
+    var summaryStatus: String?
+    var autoSummary = false { didSet { Preferences.autoSummary = autoSummary } }
+    var summaryLanguage = "Deutsch" { didSet { Preferences.summaryLanguage = summaryLanguage } }
+    var modelDownloadStatus = ""
+    var modelDownloadRunning = false
+    var matchingCalibrated = false
+    var recordingPath = "" { didSet { Preferences.recordingPath = recordingPath } }
+    @ObservationIgnored private var processingTask: Task<Void, Never>?
+    @ObservationIgnored private var downloadTask: Task<Void, Never>?
+    @ObservationIgnored private var processingID = UUID()
+    @ObservationIgnored private var referencePlayer: AVAudioPlayer?
+    @ObservationIgnored private var playbackTask: Task<Void, Never>?
 
     // MARK: - Heavy / audio objects (not observation-tracked)
 
@@ -223,6 +238,9 @@ final class RecorderModel {
         liveTranscriptionEnabled = Preferences.liveTranscription
         speakerLabelsEnabled = Preferences.speakerLabels
         voiceProfilesEnabled = Preferences.voiceProfiles
+        recordingPath = Preferences.recordingPath
+        autoSummary = Preferences.autoSummary
+        summaryLanguage = Preferences.summaryLanguage
     }
 
     // MARK: - Recording control
@@ -230,6 +248,8 @@ final class RecorderModel {
     func startRecording(meeting: Meeting?) {
         guard state == .idle else { return }
 
+        cancelProcessing()
+        speakerStore.clearPending()
         let mode = audioHandlingMode
         guard !mode.producesNothing(liveTranscriptionEnabled: liveTranscriptionEnabled) else {
             statusMessage = "Transcript-only mode needs live transcription switched on, otherwise nothing would be saved."
@@ -247,6 +267,12 @@ final class RecorderModel {
         currentSession = session
         activeMeeting = meeting
         activeMode = mode
+        do {
+            let metadata = MeetingRecord(scope: customerScope.isEmpty ? "default" : customerScope, startedAt: now,
+                                         title: meeting?.title, attendees: meeting?.attendees ?? [],
+                                         attendeeEmails: meeting?.attendeeEmails ?? [], hasCalendarEvent: meeting != nil)
+            try PrivateStorage.save(metadata, to: session.folderURL.appendingPathComponent("meeting.json"))
+        } catch { currentSession = nil; activeMeeting = nil; statusMessage = error.localizedDescription; return }
         live.live.maxWindowSamples = LiveTranscriber.windowCap(for: mode)
 
         // Clear any previous recording's transcription UI.
@@ -305,7 +331,7 @@ final class RecorderModel {
             live.beginSession()
             let name = whisperModel
             Task { [weak self] in
-                await self?.live.loadModel(name, downloadIfNeeded: true)
+                await self?.live.loadModel(name, downloadIfNeeded: false)
             }
         }
 
@@ -465,6 +491,8 @@ final class RecorderModel {
 
             await MainActor.run { [weak self] in
                 guard let self else { return }
+                self.refreshRecordings()
+                guard self.state == .idle else { return }
                 self.lastTranscription = pending
                 self.statusMessage = mixError == nil
                     ? "Saved \(outputURL.lastPathComponent)"
@@ -483,7 +511,10 @@ final class RecorderModel {
 
             await MainActor.run { [weak self] in
                 guard let self else { return }
-                if let liveResult, !liveResult.isEmpty, liveResult.complete {
+                guard self.state == .idle else { return }
+                if mixError == nil, mode.runsPolishPass {
+                    self.startTranscription(pending)
+                } else if let liveResult, !liveResult.isEmpty, liveResult.complete {
                     self.writeLiveTranscript(liveResult.lines, pending: pending, keepStatus: mixError != nil)
                 } else if mixError == nil, mode.runsPolishPass {
                     self.startTranscription(pending)
@@ -597,23 +628,11 @@ final class RecorderModel {
     /// The markdown is never patched. `transcript.json` is the source of truth, so a
     /// rename re-renders it and stays idempotent across repeated applications.
     func renameSpeaker(id: String, to name: String) {
+        cancelProcessing()
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty,
               let document = lastDocument,
               let pending = lastTranscription else { return }
-
-        // The microphone speaker is identified structurally, so renaming it changes the
-        // display label only and never creates or updates a profile.
-        if voiceProfilesEnabled,
-           id != SpeakerNaming.micSpeakerID,
-           let centroidsID = document.speakerCentroidsID {
-            do {
-                try speakerStore.applyName(trimmed, toCluster: id, pendingID: centroidsID)
-            } catch {
-                Self.log.error("could not update voice profiles: \(error.localizedDescription)")
-                statusMessage = "Renamed, but the voice profile could not be saved"
-            }
-        }
 
         writeTranscript(
             document: document.renamingSpeaker(id, to: trimmed),
@@ -630,6 +649,9 @@ final class RecorderModel {
 
     /// Transcribe a saved recording's audio with the local model.
     private func startTranscription(_ pending: PendingTranscription) {
+        guard state == .idle else { return }
+        cancelProcessing()
+        let operation = UUID(); processingID = operation
         lastTranscription = pending
         lastTranscriptText = nil
         lastTranscriptURL = nil
@@ -637,30 +659,35 @@ final class RecorderModel {
         transcriptionState = .running
         statusMessage = "Transcribing locally…"
 
-        Task { [weak self] in
+        processingTask = Task { [weak self] in
             guard let self else { return }
             guard let audioURL = pending.audioURL else {
                 self.transcriptionState = .failed("This recording kept no audio, so it cannot be transcribed again.")
                 return
             }
             do {
+                await self.live.loadModel(self.whisperModel, downloadIfNeeded: false)
                 let offline = try await self.live.transcribeFile(audioURL)
+                try Task.checkCancellation()
+                guard self.processingID == operation else { return }
                 guard !offline.lines.isEmpty else {
                     self.transcriptionState = .failed("The model returned an empty transcript (silent audio?).")
                     self.statusMessage = "Transcription produced no text"
                     return
                 }
-                var names = offline.speakerNames
+                let names = offline.speakerNames
+                let record = (try? PrivateStorage.read(MeetingRecord.self, from: pending.folderURL.appendingPathComponent("meeting.json"))) ?? MeetingRecord(scope: "default", startedAt: pending.startedAt, title: pending.meetingTitle)
+                var proposals: [String: String] = [:]
                 var centroidsID: String?
 
                 if self.voiceProfilesEnabled, !offline.clusters.isEmpty {
-                    let assignments = SpeakerNaming.resolve(
+                    let assignments = self.matchingCalibrated ? SpeakerNaming.resolve(
                         clusters: offline.clusters,
                         defaultNames: offline.speakerNames,
-                        profiles: self.speakerStore.profiles
-                    )
+                        profiles: SpeakerNaming.eligible(self.speakerStore.profiles, meeting: record)
+                    ) : [:]
                     for (id, assignment) in assignments {
-                        names[id] = assignment.name
+                        if assignment.profileID != nil { proposals[id] = assignment.name }
                     }
 
                     // `appliedProfileID` stays nil even where a profile matched: an
@@ -686,7 +713,7 @@ final class RecorderModel {
                     }
                 }
 
-                let document = TranscriptDocument(
+                var document = TranscriptDocument(
                     meetingTitle: pending.meetingTitle,
                     attendees: pending.attendees,
                     startedAt: pending.startedAt,
@@ -694,13 +721,20 @@ final class RecorderModel {
                     model: self.live.loadedModelName ?? self.live.modelName,
                     isPolished: true,
                     lines: offline.lines.map {
-                        TranscriptDocument.StoredLine(time: $0.time, text: $0.text, speakerID: $0.speaker)
+                        TranscriptDocument.StoredLine(time: $0.time, text: $0.text, speakerID: $0.speaker, endTime: $0.endTime, channel: $0.channel, overlap: $0.overlap)
                     },
                     speakerNames: names,
                     speakerCentroidsID: centroidsID
                 )
+                document.schemaVersion = 1; document.meetingRecord = record; document.proposedNames = proposals
                 self.writeTranscript(document: document, pending: pending, keepStatus: false)
+                self.live.releaseModels()
+                if self.autoSummary { await self.generateSummary(operation: operation) }
+            } catch is CancellationError {
+                guard self.processingID == operation else { return }
+                self.transcriptionState = .idle; self.statusMessage = "Verarbeitung abgebrochen"
             } catch {
+                guard self.processingID == operation else { return }
                 let message = RecorderModel.describeTranscriptionError(error)
                 self.transcriptionState = .failed(message)
                 self.statusMessage = "Transcription failed"
@@ -738,12 +772,10 @@ final class RecorderModel {
         pending: PendingTranscription,
         keepStatus: Bool
     ) {
-        let markdownURL = pending.folderURL.appendingPathComponent("transcript.md")
-        let jsonURL = pending.folderURL.appendingPathComponent("transcript.json")
         let markdown = document.renderMarkdown()
+        let markdownURL: URL
         do {
-            try document.write(jsonTo: jsonURL)
-            try markdown.write(to: markdownURL, atomically: true, encoding: .utf8)
+            markdownURL = try TranscriptRepository.publish(document, folder: pending.folderURL)
         } catch {
             transcriptionState = .failed("Could not write the transcript: \(error.localizedDescription)")
             return
@@ -756,6 +788,99 @@ final class RecorderModel {
             statusMessage = "Transcript saved (transcript.md)"
         }
         refreshRecordings()
+    }
+
+    func cancelProcessing() {
+        processingTask?.cancel(); processingTask = nil; processingID = UUID()
+        playbackTask?.cancel(); referencePlayer?.stop()
+        if transcriptionState == .running { transcriptionState = .idle }
+        summaryStatus = nil
+    }
+    func downloadModels(_ id: String) {
+        guard !modelDownloadRunning else { return }
+        modelDownloadRunning = true
+        downloadTask = Task {
+            defer { modelDownloadRunning = false }
+            do {
+                try await ModelManager.shared.download(id) { message in
+                    await MainActor.run { self.modelDownloadStatus = message }
+                }
+                modelDownloadStatus = "Modell bereit (offline)"
+            } catch is CancellationError { modelDownloadStatus = "Download abgebrochen" }
+            catch { modelDownloadStatus = error.localizedDescription }
+        }
+    }
+    func downloadWhisper() {
+        guard !modelDownloadRunning else { return }
+        modelDownloadRunning = true
+        downloadTask = Task {
+            defer { modelDownloadRunning = false }
+            await live.loadModel(whisperModel, downloadIfNeeded: true)
+        }
+    }
+    func cancelModelDownload() { downloadTask?.cancel() }
+    func chooseRecordingFolder() {
+        let panel = NSOpenPanel(); panel.canChooseDirectories = true; panel.canChooseFiles = false; panel.canCreateDirectories = true
+        if panel.runModal() == .OK, let url = panel.url { recordingPath = url.path; refreshRecordings() }
+    }
+    var synchronizedFolderWarning: Bool {
+        let path = (RecordingsLibrary.recordingsRoot()?.resolvingSymlinksInPath().path ?? "").lowercased()
+        return ["mobile documents", "clouddocs", "cloudstorage", "onedrive", "dropbox", "google drive"].contains { path.contains($0) }
+    }
+    func enrollSpeaker(id: String, name: String, category: String, email: String?) {
+        guard let doc = lastDocument, let centroid = doc.speakerCentroidsID, let record = doc.meetingRecord else { statusMessage = "Bitte erneut verarbeiten und einen sauberen Abschnitt verwenden."; return }
+        do {
+            try speakerStore.enrollInternal(name: name, clusterID: id, pendingID: centroid, meeting: record, category: category, email: email)
+            renameSpeaker(id: id, to: name)
+        } catch { statusMessage = error.localizedDescription }
+    }
+    func rejectProposal(id: String) {
+        guard var document = lastDocument, let pending = lastTranscription else { return }
+        document.proposedNames?.removeValue(forKey: id)
+        writeTranscript(document: document, pending: pending, keepStatus: false)
+    }
+    func playReference(id: String) {
+        guard let doc = lastDocument, let pending = lastTranscription, let url = pending.audioURL,
+              let line = doc.lines.first(where: { $0.speakerID == id && $0.overlap != true && ($0.endTime ?? $0.time) - $0.time >= 3 }) else { statusMessage = "Kein sauberer Referenzabschnitt verfügbar."; return }
+        do {
+            playbackTask?.cancel(); referencePlayer?.stop()
+            let player = try AVAudioPlayer(contentsOf: url)
+            player.pan = line.channel == "microphone" ? 1 : -1
+            player.currentTime = line.time; player.play(); referencePlayer = player
+            playbackTask = Task { try? await Task.sleep(for: .seconds(min(10, (line.endTime ?? line.time) - line.time))); if !Task.isCancelled { player.stop() } }
+        } catch { statusMessage = error.localizedDescription }
+    }
+    func summarize() {
+        guard state == .idle, lastDocument != nil else { return }
+        cancelProcessing(); let operation = UUID(); processingID = operation
+        processingTask = Task { await generateSummary(operation: operation) }
+    }
+    private func generateSummary(operation: UUID) async {
+        guard let document = lastDocument, let pending = lastTranscription else { return }
+        let input = document.summaryInput
+        summaryStatus = "Zusammenfassen…"
+        live.releaseModels()
+        do {
+            let result = try await MeetingSummaryService().generate(input, language: summaryLanguage) { message in
+                await MainActor.run { [weak self] in if self?.processingID == operation { self?.summaryStatus = message } }
+            }
+            try Task.checkCancellation()
+            guard processingID == operation, lastDocument == document else { return }
+            try PrivateStorage.save(result, to: pending.folderURL.appendingPathComponent("summary.json"))
+            try PrivateStorage.write(Data(result.markdown(transcript: input).utf8), to: pending.folderURL.appendingPathComponent("summary.md"))
+            summaryStatus = "Zusammenfassung gespeichert"
+        } catch is CancellationError { if processingID == operation { summaryStatus = "Zusammenfassung abgebrochen" } }
+        catch { if processingID == operation { summaryStatus = error.localizedDescription } }
+    }
+    func showSavedTranscript(_ entry: RecordingEntry) {
+        cancelProcessing()
+        guard let url = entry.transcriptURL else { return }
+        do {
+            lastDocument = try TranscriptDocument.load(from: entry.folderURL.appendingPathComponent("transcript.json"))
+            lastTranscriptText = lastDocument?.renderMarkdown(); lastTranscriptURL = url
+            lastTranscription = PendingTranscription(audioURL: entry.audioURL, folderURL: entry.folderURL, meetingTitle: entry.title, attendees: [], startedAt: entry.date)
+            transcriptionState = .done(url)
+        } catch { statusMessage = "Altes Markdown-Transkript: bitte zur Bearbeitung erneut verarbeiten." }
     }
 
     /// Copy the live transcript (confirmed lines + current hypothesis) while

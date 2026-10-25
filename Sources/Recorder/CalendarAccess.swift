@@ -105,7 +105,7 @@ final class CalendarAccess {
 
                 let id = ev.eventIdentifier ?? UUID().uuidString
                 return Meeting(id: id, title: ev.title ?? "Untitled", start: s, end: e,
-                               attendees: self.attendeeNames(ev))
+                               attendees: self.attendeeNames(ev), attendeeEmails: self.attendeeEmails(ev))
             }
 
         return trimmedAroundNow(meetings, now: now)
@@ -142,6 +142,14 @@ final class CalendarAccess {
         return Array(unique.prefix(25))
     }
 
+    private func attendeeEmails(_ event: EKEvent) -> [String] {
+        let participants = (event.attendees ?? []) + (event.organizer.map { [$0] } ?? [])
+        return Array(Set(participants.compactMap { person in
+            let url = person.url.absoluteString
+            return url.lowercased().hasPrefix("mailto:") ? String(url.dropFirst(7)).lowercased() : nil
+        }))
+    }
+
     /// A participant's display name, or its email local-part, or nil.
     private func displayName(_ participant: EKParticipant) -> String? {
         if let name = participant.name?.trimmingCharacters(in: .whitespacesAndNewlines), !name.isEmpty {
@@ -175,7 +183,7 @@ final class CalendarAccess {
                 guard seen.insert(dedupKey).inserted else { return nil }
                 let id = ev.eventIdentifier ?? UUID().uuidString
                 return Meeting(id: id, title: ev.title ?? "Untitled", start: s, end: e,
-                               attendees: self.attendeeNames(ev))
+                               attendees: self.attendeeNames(ev), attendeeEmails: self.attendeeEmails(ev))
             }
     }
 

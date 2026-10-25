@@ -22,6 +22,15 @@ enum SpeakerNaming {
 
     /// The speaker id of the microphone channel, which is the user by construction.
     static let micSpeakerID = "you"
+    static let embeddingVersion = "SpeakerKit-1.1.0/pyannote-v3-W8A16@556fc52"
+    static func eligible(_ profiles: [SpeakerProfile], meeting: MeetingRecord) -> [SpeakerProfile] {
+        let emails = Set(meeting.attendeeEmails.map { $0.lowercased() })
+        return profiles.filter { profile in
+            profile.scope == meeting.scope && profile.embeddingVersion == embeddingVersion &&
+            ["self", "internal"].contains(profile.category ?? "") &&
+            (profile.category == "self" || !meeting.hasCalendarEvent || profile.email.map { emails.contains($0.lowercased()) } == true)
+        }
+    }
 
     struct Assignment: Equatable {
         var name: String
@@ -62,10 +71,15 @@ enum SpeakerNaming {
             $0.distance == $1.distance ? $0.clusterID < $1.clusterID : $0.distance < $1.distance
         }
 
+        // A near tie is unknown, even if both candidates pass the absolute threshold.
+        let ambiguous = Set(clusters.keys.filter { id in
+            let scores = candidates.filter { $0.clusterID == id }.map(\.distance).sorted()
+            return scores.count > 1 && scores[1] - scores[0] < 0.12
+        })
         var takenClusters: Set<String> = []
         var takenProfiles: Set<UUID> = []
         for candidate in candidates {
-            guard !takenClusters.contains(candidate.clusterID),
+            guard !ambiguous.contains(candidate.clusterID), !takenClusters.contains(candidate.clusterID),
                   !takenProfiles.contains(candidate.profileID),
                   let profile = profiles.first(where: { $0.id == candidate.profileID }) else { continue }
             takenClusters.insert(candidate.clusterID)

@@ -53,6 +53,7 @@ final class SpeakerProfileStore {
 
     private(set) var profiles: [SpeakerProfile] = []
 
+    @ObservationIgnored private var pendingMemory: [String: PendingSpeakers] = [:]
     @ObservationIgnored private let baseURL: URL
     @ObservationIgnored private static let log = Logger(subsystem: "com.tobi.Recorder", category: "SpeakerProfileStore")
 
@@ -125,11 +126,13 @@ final class SpeakerProfileStore {
     }
 
     func delete(profileID: UUID) throws {
+        pendingMemory.removeAll()
         profiles.removeAll { $0.id == profileID }
         try save()
     }
 
     func deleteAllVoiceData() throws {
+        pendingMemory.removeAll()
         profiles = []
         if FileManager.default.fileExists(atPath: baseURL.path) {
             try FileManager.default.removeItem(at: baseURL)
@@ -189,6 +192,30 @@ final class SpeakerProfileStore {
         return profileID
     }
 
+    func enrollInternal(name: String, clusterID: String, pendingID: String, meeting: MeetingRecord,
+                        category: String, email: String?) throws {
+        guard ["self", "internal"].contains(category), let pending = loadPending(id: pendingID),
+              let cluster = pending.clusters[clusterID], cluster.speechSeconds >= SpeakerNaming.minSpeechSeconds,
+              !cluster.vector.isEmpty, cluster.vector.allSatisfy(\.isFinite),
+              !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw LocalError.message("Kein geeigneter sauberer Referenzabschnitt verfügbar. Bitte nur für dieses Meeting benennen.") }
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let vector = VoiceCentroid(vector: cluster.vector, sampleSeconds: cluster.speechSeconds, addedAt: pending.createdAt)
+        if let i = profiles.firstIndex(where: { $0.name == trimmed && $0.scope == meeting.scope && $0.category == category && $0.embeddingVersion == SpeakerNaming.embeddingVersion }) {
+            if !profiles[i].centroids.contains(where: { $0.addedAt == vector.addedAt }) { profiles[i].appendCentroid(vector) }
+        } else {
+            var profile = SpeakerProfile(id: UUID(), name: trimmed, createdAt: Date(), updatedAt: Date(), centroids: [vector])
+            profile.scope = meeting.scope; profile.category = category; profile.email = email?.lowercased()
+            profile.embeddingVersion = SpeakerNaming.embeddingVersion
+            profiles.append(profile)
+        }
+        try save()
+    }
+    func renameProfile(_ id: UUID, to name: String) throws {
+        guard !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              let i = profiles.firstIndex(where: { $0.id == id }) else { return }
+        profiles[i].name = name.trimmingCharacters(in: .whitespacesAndNewlines); try save()
+    }
+
     // MARK: Pending centroids
 
     private var pendingDirectory: URL { baseURL.appendingPathComponent("pending", isDirectory: true) }
@@ -198,20 +225,16 @@ final class SpeakerProfileStore {
     }
 
     func writePending(_ pending: PendingSpeakers) throws {
-        try FileManager.default.createDirectory(at: pendingDirectory, withIntermediateDirectories: true)
-        let encoder = JSONEncoder()
-        encoder.dateEncodingStrategy = .iso8601
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        try encoder.encode(pending).write(to: pendingURL(id: pending.id), options: .atomic)
+        guard UUID(uuidString: pending.id) != nil else { throw LocalError.message("Ungültige Sprecherreferenz.") }
+        pendingMemory[pending.id] = pending
     }
 
     func loadPending(id: String) -> PendingSpeakers? {
-        let url = pendingURL(id: id)
-        guard FileManager.default.fileExists(atPath: url.path) else { return nil }
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
-        return try? decoder.decode(PendingSpeakers.self, from: Data(contentsOf: url))
+        guard UUID(uuidString: id) != nil else { return nil }
+        return pendingMemory[id]
     }
+
+    func clearPending() { pendingMemory.removeAll() }
 
     /// Drop pending centroids nobody named. Biometric data should not outlive its
     /// purpose, and an unnamed cluster has none after a month.
@@ -233,11 +256,11 @@ final class SpeakerProfileStore {
     }
 
     private func save() throws {
-        try FileManager.default.createDirectory(at: baseURL, withIntermediateDirectories: true)
+        try PrivateStorage.directory(baseURL)
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        try encoder.encode(StoredProfiles(profiles: profiles)).write(to: profilesURL, options: .atomic)
+        try PrivateStorage.write(encoder.encode(StoredProfiles(profiles: profiles)), to: profilesURL)
     }
 
     private struct StoredProfiles: Codable {

@@ -405,10 +405,13 @@ struct RecorderPanel: View {
             EmptyView()
 
         case .running:
+            VStack(alignment: .leading) {
+                Button("Verarbeitung abbrechen") { model.cancelProcessing() }
+            }
             HStack(spacing: 8) {
                 ProgressView()
                     .controlSize(.small)
-                Text("Transcribing locally…")
+                Text(model.live.processingStage.isEmpty ? "Transkribieren…" : model.live.processingStage)
                     .font(.callout)
                     .foregroundStyle(.secondary)
                 Spacer()
@@ -458,6 +461,11 @@ struct RecorderPanel: View {
 
                 if !model.currentSpeakers.isEmpty {
                     speakerChips
+                    Button("Zusammenfassung erstellen / erneuern") { model.summarize() }
+                    if let status = model.summaryStatus {
+                        Text(status).font(.caption).fixedSize(horizontal: false, vertical: true)
+                        Button("Verarbeitung abbrechen") { model.cancelProcessing() }
+                    }
                 }
             }
 
@@ -635,6 +643,7 @@ struct RecorderPanel: View {
             // Actions menu.
             Menu {
                 if let transcript = entry.transcriptURL {
+                    Button("Transkript und Sprecher bearbeiten") { model.showSavedTranscript(entry) }
                     Button { model.copyTextOfFile(transcript) } label: {
                         Label("Copy transcript text", systemImage: "doc.on.clipboard")
                     }
@@ -843,6 +852,10 @@ private struct MeetingRow: View {
 /// Renaming is also how a voice profile is created: there is no separate enrollment
 /// step, so the correction the user would make anyway is what teaches the store.
 private struct SpeakerChip: View {
+    @Environment(RecorderModel.self) private var model
+    @State private var enrollVoice = false
+    @State private var category = "internal"
+    @State private var email = ""
     let id: String
     let name: String
     let rename: (String) -> Void
@@ -872,8 +885,22 @@ private struct SpeakerChip: View {
         .help("Rename \(name)")
         .popover(isPresented: $editing) {
             VStack(alignment: .leading, spacing: 8) {
-                Text("Rename speaker")
-                    .font(.callout.weight(.medium))
+                Text("Sprecher bestätigen")
+                Button("Referenz anhören") { model.playReference(id: id) }
+                if let proposal = model.lastDocument?.proposedNames?[id] {
+                    Text("Vorschlag: \(proposal)")
+                    Button("Vorschlag übernehmen (dieses Meeting)") { draft = proposal; apply() }
+                    Button("Vorschlag ablehnen") { model.rejectProposal(id: id) }
+                }
+                Toggle("Als internes Stimmprofil speichern", isOn: $enrollVoice)
+                if enrollVoice {
+                    Picker("Person", selection: $category) {
+                        Text("Eigene Stimme").tag("self")
+                        Text("Interne Person").tag("internal")
+                    }
+                    TextField("Kalender-E-Mail (optional)", text: $email)
+                    Text("Die Einwilligung der Person sollte vorliegen. Externe Personen nur für dieses Meeting benennen.").font(.caption)
+                }
                 TextField("Name", text: $draft)
                     .textFieldStyle(.roundedBorder)
                     .frame(width: 180)
@@ -892,7 +919,8 @@ private struct SpeakerChip: View {
     private func apply() {
         let trimmed = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
-        rename(trimmed)
+        if enrollVoice { model.enrollSpeaker(id: id, name: trimmed, category: category, email: email.isEmpty ? nil : email) }
+        else { rename(trimmed) }
         editing = false
     }
 }

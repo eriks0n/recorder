@@ -147,6 +147,7 @@ final class LocalTranscriptionEngine {
             usePrefillPrompt: true,
             detectLanguage: live.language == nil,
             skipSpecialTokens: true,
+            wordTimestamps: forFile,
             suppressBlank: true,
             chunkingStrategy: forFile ? .vad : nil
         )
@@ -165,30 +166,53 @@ final class LocalTranscriptionEngine {
     /// Serialized against the live tick loop: WhisperKit carries mutable decode state, so
     /// one pipe must never transcribe twice concurrently. The two channel passes
     /// therefore run one after the other.
+    var processingStage = ""
+    func releaseModels() { host.unload(); speakerKit = nil }
+
     func transcribeFile(_ url: URL) async throws -> OfflineTranscription {
-        let path = url.path
-        guard Self.channelCount(of: url) >= 2 else {
-            return try await transcribeSingleChannel(path: path)
+        var allWords: [TranscriptWord] = [], intervals: [SpeakerInterval] = [], cleanClusters: [String: ClusterEvidence] = [:]
+        let channelCount = Self.channelCount(of: url)
+        for channel in 0..<min(2, channelCount) {
+            try Task.checkCancellation()
+            processingStage = "Audio vorbereiten: Kanal \(channel + 1)"
+            let samples = try await Self.load(path: url.path, channel: channel)
+            guard Self.hasSignal(samples) else { continue }
+            processingStage = "Sprecher trennen: Kanal \(channel + 1)"
+            // Both channels are diarized; microphone origin is never an identity claim.
+            let (spans, _) = try await diarize(samples)
+            let audioChannel: AudioChannel = channel == 0 ? .desktop : .microphone
+            let prefix = channel == 0 ? "D" : "M"
+            for span in spans {
+                intervals.append(.init(id: "Sprecher-\(prefix)-\(span.clusterID + 1)", start: span.start, end: span.end, channel: audioChannel))
+            }
+            processingStage = "Transkribieren: Kanal \(channel + 1)"
+            let text = try await transcribe(samples)
+            allWords += text.map { TranscriptWord(text: $0.text, start: $0.start, end: $0.end, channel: audioChannel, speakerID: "unknown") }
+            // Enrollment evidence is re-extracted from a sufficiently long, isolated segment.
+            // Never persist a centroid aggregated from overlapping or uncertain segments.
+            for clusterID in Set(spans.map(\.clusterID)) {
+                try Task.checkCancellation()
+                let clean = spans.filter { span in
+                    span.clusterID == clusterID && span.end - span.start >= SpeakerNaming.minSpeechSeconds && !spans.contains {
+                        $0.clusterID != clusterID && min($0.end, span.end) > max($0.start, span.start)
+                    }
+                }
+                if let span = clean.max(by: { $0.end - $0.start < $1.end - $1.start }) {
+                    let first = max(0, Int(span.start * 16000)), last = min(samples.count, Int(min(span.end, span.start + 12) * 16000))
+                    if last > first {
+                        let (referenceSpans, centroids) = try await diarize(Array(samples[first..<last]))
+                        if centroids.count == 1, Set(referenceSpans.map(\.clusterID)).count == 1, let vector = centroids.values.first {
+                            cleanClusters["Sprecher-\(prefix)-\(clusterID + 1)"] = ClusterEvidence(centroid: vector, speechSeconds: Double(last - first) / 16000)
+                        }
+                    }
+                }
+            }
         }
-
-        let desktopSamples = try await Self.load(path: path, channel: 0)
-        let micSamples = try await Self.load(path: path, channel: 1)
-
-        let desktop = Self.hasSignal(desktopSamples) ? try await transcribe(desktopSamples) : []
-        let mic = Self.hasSignal(micSamples) ? try await transcribe(micSamples) : []
-
-        var diarized: [DiarizedSpan] = []
-        var centroids: [Int: [Float]] = [:]
-        if labelSpeakers, !desktop.isEmpty {
-            (diarized, centroids) = await diarize(desktopSamples)
-        }
-
-        return OfflineTranscription.build(
-            mic: mic,
-            desktop: desktop,
-            diarized: diarized,
-            centroids: centroids
-        )
+        let (_, turns) = TranscriptAssembler.assemble(words: allWords, intervals: intervals)
+        let ids = Set(turns.map(\.speakerID))
+        return OfflineTranscription(lines: turns.map {
+            TranscriptLine(time: $0.start, text: $0.text, speaker: $0.speakerID, endTime: $0.end, channel: $0.channel.rawValue, overlap: $0.overlap)
+        }, clusters: cleanClusters, speakerNames: Dictionary(uniqueKeysWithValues: ids.map { ($0, $0) }))
     }
 
     /// Legacy or externally supplied recordings that are not our two-channel layout.
@@ -203,7 +227,7 @@ final class LocalTranscriptionEngine {
         var diarized: [DiarizedSpan] = []
         var centroids: [Int: [Float]] = [:]
         if labelSpeakers, !segments.isEmpty {
-            (diarized, centroids) = await diarize(samples)
+            (diarized, centroids) = try await diarize(samples)
         }
 
         return OfflineTranscription.build(
@@ -219,18 +243,16 @@ final class LocalTranscriptionEngine {
         let results = try await host.withPipe { pipe in
             try await pipe.transcribe(audioArray: samples, decodeOptions: options)
         }
-        return cleanSegments(results).map {
-            TimedText(
-                start: TimeInterval($0.start),
-                end: TimeInterval($0.end),
-                text: $0.text.trimmingCharacters(in: .whitespacesAndNewlines)
-            )
+        try Task.checkCancellation()
+        return try cleanSegments(results).flatMap { segment -> [TimedText] in
+            guard let words = segment.words, !words.isEmpty else { throw LocalError.message("Das Modell lieferte keine Wortzeitstempel. Ergebnis nicht übernommen.") }
+            return words.map { TimedText(start: TimeInterval($0.start), end: TimeInterval($0.end), text: $0.word.trimmingCharacters(in: .whitespacesAndNewlines)) }
         }
     }
 
     /// Diarization is never allowed to fail the transcription: a failure costs the
     /// speaker labels and nothing else.
-    private func diarize(_ samples: [Float]) async -> ([DiarizedSpan], [Int: [Float]]) {
+    private func diarize(_ samples: [Float]) async throws -> ([DiarizedSpan], [Int: [Float]]) {
         do {
             let kit = try await diarizer()
             let result = try await kit.diarize(audioArray: samples)
@@ -245,8 +267,8 @@ final class LocalTranscriptionEngine {
             }
             return (spans, result.speakerCentroidEmbeddings)
         } catch {
-            Self.log.error("diarization failed, transcript left unlabeled: \(error.localizedDescription)")
-            return ([], [:])
+            if error is CancellationError { throw error }
+            throw LocalError.message("Lokale Sprechertrennung fehlgeschlagen. Bitte SpeakerKit-Modell in den Einstellungen prüfen. Vorherige Ergebnisse bleiben erhalten.")
         }
     }
 
@@ -279,8 +301,8 @@ final class LocalTranscriptionEngine {
     private func diarizer() async throws -> SpeakerKit {
         if let speakerKit { return speakerKit }
         let config = PyannoteConfig(
-            downloadBase: WhisperModelStorage.base.path,
-            download: true,
+            modelFolder: try ModelManager.verifiedFolder("diar").path,
+            download: false,
             load: false,
             verbose: false
         )

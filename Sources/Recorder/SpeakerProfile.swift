@@ -27,6 +27,12 @@ struct SpeakerProfile: Codable, Equatable, Identifiable {
     var updatedAt: Date
     var centroids: [VoiceCentroid]
 
+    // Optional metadata keeps old exports readable, but legacy profiles are excluded from matching.
+    var scope: String?
+    var category: String?
+    var email: String?
+    var embeddingVersion: String?
+
     static let maxCentroids = 8
 
     /// Append, evicting oldest-first past the cap.
@@ -55,7 +61,7 @@ struct SpeakerProfile: Codable, Equatable, Identifiable {
 enum VoiceMatching {
 
     static func cosineDistance(_ lhs: [Float], _ rhs: [Float]) -> Float {
-        guard lhs.count == rhs.count, !lhs.isEmpty else { return 1.0 }
+        guard lhs.count == rhs.count, !lhs.isEmpty, lhs.allSatisfy(\.isFinite), rhs.allSatisfy(\.isFinite) else { return 1.0 }
 
         let length = vDSP_Length(lhs.count)
         var dot: Float = 0

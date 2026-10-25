@@ -50,13 +50,15 @@ struct Meeting: Identifiable, Equatable {
     /// Display names of the organizer + invitees (best-effort; may be empty).
     /// Used only as transcription context (improving speaker-identity guesses).
     let attendees: [String]
+    var attendeeEmails: [String] = []
 
-    init(id: String, title: String, start: Date, end: Date, attendees: [String] = []) {
+    init(id: String, title: String, start: Date, end: Date, attendees: [String] = [], attendeeEmails: [String] = []) {
         self.id = id
         self.title = title
         self.start = start
         self.end = end
         self.attendees = attendees
+        self.attendeeEmails = attendeeEmails
     }
 
     /// start <= now <= end
@@ -127,14 +129,8 @@ struct RecordingSession {
     static func create(now: Date, meetingTitle: String?, mode: AudioHandlingMode) throws -> RecordingSession {
         let fm = FileManager.default
 
-        let documents = try fm.url(
-            for: .documentDirectory,
-            in: .userDomainMask,
-            appropriateFor: nil,
-            create: true
-        )
-        let recordingsRoot = documents
-            .appendingPathComponent("Recordings", isDirectory: true)
+        guard let recordingsRoot = RecordingsLibrary.recordingsRoot() else { throw LocalError.message("Aufnahmeordner fehlt.") }
+        try PrivateStorage.directory(recordingsRoot)
 
         let dateFmt = DateFormatter()
         dateFmt.locale = Locale(identifier: "en_US_POSIX")
@@ -164,7 +160,7 @@ struct RecordingSession {
             }
             folderURL = candidate
         }
-        try fm.createDirectory(at: folderURL, withIntermediateDirectories: true)
+        try PrivateStorage.directory(folderURL)
 
         return RecordingSession(
             folderURL: folderURL,

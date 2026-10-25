@@ -10,6 +10,9 @@ struct TranscriptDocument: Codable, Equatable {
         var time: TimeInterval
         var text: String
         var speakerID: String?
+        var endTime: Double?
+        var channel: String?
+        var overlap: Bool?
     }
 
     var meetingTitle: String?
@@ -25,6 +28,10 @@ struct TranscriptDocument: Codable, Equatable {
     /// were enabled. Only the uuid is stored here: embeddings are biometric data and
     /// stay out of the recording folder, so a transcript you share carries none.
     var speakerCentroidsID: String?
+
+    var schemaVersion: Int?
+    var meetingRecord: MeetingRecord?
+    var proposedNames: [String: String]?
 
     /// Speaker ids in order of first speech.
     var speakerIDs: [String] {
@@ -75,25 +82,31 @@ struct TranscriptDocument: Codable, Equatable {
         out.append("---")
         out.append("")
 
-        for line in lines {
+        for (index, line) in lines.enumerated() {
             let speaker = line.speakerID.map { displayName(for: $0) }
-            out.append(TranscriptLine(time: line.time, text: line.text, speaker: speaker).markdown)
+            let body = TranscriptLine(time: line.time, text: line.text, speaker: speaker).markdown
+            out.append("T\(index + 1) " + body + (line.overlap == true ? " [Überlappung/unklar]" : ""))
             out.append("")
         }
         return out.joined(separator: "\n")
     }
 
     static func load(from url: URL) throws -> TranscriptDocument {
+        if url.lastPathComponent == "transcript.json", let current = try TranscriptRepository.currentJSON(in: url.deletingLastPathComponent()), current != url {
+            return try load(from: current)
+        }
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
-        return try decoder.decode(TranscriptDocument.self, from: Data(contentsOf: url))
+        let document = try decoder.decode(TranscriptDocument.self, from: Data(contentsOf: url))
+        guard document.schemaVersion == nil || document.schemaVersion == 1 else { throw LocalError.message("Unbekannte Transkriptversion.") }
+        return document
     }
 
     func write(jsonTo url: URL) throws {
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        try encoder.encode(self).write(to: url, options: .atomic)
+        try PrivateStorage.write(encoder.encode(self), to: url)
     }
 }
 
@@ -114,7 +127,7 @@ extension TranscriptDocument {
         self.model = model
         self.isPolished = false
         self.lines = lines.map {
-            StoredLine(time: $0.time, text: $0.text, speakerID: $0.speaker)
+            StoredLine(time: $0.time, text: $0.text, speakerID: $0.speaker, endTime: $0.endTime, channel: $0.channel, overlap: $0.overlap)
         }
         self.speakerNames = Dictionary(
             uniqueKeysWithValues: Set(lines.compactMap(\.speaker)).map { ($0, $0) }

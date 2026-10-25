@@ -133,26 +133,32 @@ final class ModelHost<Pipe: AnyObject> {
     func awaitReady(timeout: TimeInterval = 600) async throws -> Pipe {
         switch state {
         case .notDownloaded, .unloaded, .failed:
-            await loadModel(selectedModel, downloadIfNeeded: true)
+            await loadModel(selectedModel, downloadIfNeeded: false)
         default:
             break
         }
+        if case .notDownloaded = state { throw HostError.modelNotReady("Modell fehlt. Bitte den Download in den Einstellungen starten. Kein Cloud-Fallback.") }
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {
             if let pipe, case .ready = state { return pipe }
             if case .failed(let message) = state {
                 throw HostError.modelNotReady(message)
             }
-            try? await Task.sleep(for: .milliseconds(250))
+            try await Task.sleep(for: .milliseconds(250))
         }
         throw HostError.modelNotReady("timed out waiting for the model to load")
+    }
+
+    func unload() {
+        guard !busy else { return }
+        pipe = nil; loadedModel = nil; state = .unloaded
     }
 
     /// Run `body` with exclusive use of the pipe. The model carries mutable decode
     /// state, so one host must never decode twice at once.
     func withPipe<T>(_ body: (Pipe) async throws -> T) async throws -> T {
         while busy {
-            try? await Task.sleep(for: .milliseconds(50))
+            try await Task.sleep(for: .milliseconds(50))
         }
         busy = true
         defer { busy = false }

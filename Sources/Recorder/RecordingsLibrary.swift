@@ -30,29 +30,27 @@ enum RecordingsLibrary {
 
     /// ~/Documents/Recordings (not created here).
     static func recordingsRoot() -> URL? {
-        guard let documents = try? FileManager.default.url(
-            for: .documentDirectory, in: .userDomainMask, appropriateFor: nil, create: false
-        ) else { return nil }
-        return documents.appendingPathComponent("Recordings", isDirectory: true)
+        if !Preferences.recordingPath.isEmpty { return URL(fileURLWithPath: Preferences.recordingPath, isDirectory: true) }
+        return PrivateStorage.applicationRoot.appendingPathComponent("Recordings", isDirectory: true)
     }
 
     /// The `limit` most recent recording folders, newest first.
     static func recent(limit: Int) -> [RecordingEntry] {
         let fm = FileManager.default
-        guard let root = recordingsRoot(),
-              let items = try? fm.contentsOfDirectory(
+        let roots = [recordingsRoot(), fm.urls(for: .documentDirectory, in: .userDomainMask).first?.appendingPathComponent("Recordings")].compactMap { $0 }
+        let items = Array(Set(roots)).flatMap { root in
+            (try? fm.contentsOfDirectory(
                 at: root,
                 includingPropertiesForKeys: [.isDirectoryKey, .creationDateKey, .contentModificationDateKey],
                 options: [.skipsHiddenFiles]
-              ) else {
-            return []
+              )) ?? []
         }
 
         let entries: [RecordingEntry] = items.compactMap { url in
             let values = try? url.resourceValues(forKeys: [
                 .isDirectoryKey, .creationDateKey, .contentModificationDateKey,
             ])
-            guard values?.isDirectory == true else { return nil }
+            guard values?.isDirectory == true, (try? url.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink) != true else { return nil }
 
             let audio = url.appendingPathComponent("audio.m4a")
             let transcript = url.appendingPathComponent("transcript.md")

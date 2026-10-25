@@ -15,6 +15,8 @@ import SwiftUI
 struct PreferencesView: View {
     var body: some View {
         TabView {
+            LocalProcessingPreferences()
+                .tabItem { Label("Local", systemImage: "internaldrive") }
             GeneralPreferences()
                 .tabItem { Label("General", systemImage: "gearshape") }
 
@@ -197,7 +199,7 @@ private struct TranscriptionPreferences: View {
                     .foregroundStyle(.secondary)
             }
         case .notDownloaded:
-            Label("Downloads when you start recording or transcribing", systemImage: "arrow.down.circle")
+            Label("Bitte Download im Reiter Local starten", systemImage: "arrow.down.circle")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         case .failed(let message):
@@ -221,7 +223,7 @@ private struct SpeakerPreferences: View {
         Form {
             Section {
                 Toggle("Label speakers", isOn: $model.speakerLabelsEnabled)
-                Text("Live lines are labeled You (microphone) or Them (desktop audio) from the channel layout. Transcribing a saved file transcribes each channel on its own, so your own voice is always You, and the other voices are separated on-device and labeled Speaker 1, 2, ... (~50 MB one-time model download).")
+                Text("Der Offline-Durchlauf trennt Sprecher auf beiden Kanälen. Mikrofon und Desktop sind Quellen, keine Personennamen.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             } header: {
@@ -230,7 +232,7 @@ private struct SpeakerPreferences: View {
 
             Section {
                 Toggle("Match voices to saved profiles", isOn: $model.voiceProfilesEnabled)
-                Text("Renaming a speaker stores what that voice sounds like, so the same person is recognised in later recordings. A voiceprint is biometric data under GDPR Art. 9. It is kept in Application Support, never in the recording folder, so a transcript you share carries none.")
+                Text("Umbenennen gilt nur für dieses Meeting. Ein Profil wird ausschließlich über die gesonderte Bestätigung als eigene oder interne Stimme angelegt. Die Einwilligung der Person sollte vorliegen.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             } header: {
@@ -239,13 +241,13 @@ private struct SpeakerPreferences: View {
 
             Section {
                 if model.speakerStore.profiles.isEmpty {
-                    Text("No saved voices yet. Rename a speaker in a finished transcript to create one.")
+                    Text("Noch keine bestätigten internen Stimmen. Ein Profil lässt sich über den Sprecher im Transkript anlegen.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 } else {
-                    ForEach(model.speakerStore.profiles) { profile in
+                    ForEach(model.speakerStore.profiles.filter { $0.scope == model.customerScope }) { profile in
                         HStack {
-                            Text(profile.name)
+                            TextField("Name", text: Binding(get: { profile.name }, set: { value in try? model.speakerStore.renameProfile(profile.id, to: value) }))
                             Spacer()
                             Text("\(profile.centroids.count) sample\(profile.centroids.count == 1 ? "" : "s")")
                                 .font(.caption)
