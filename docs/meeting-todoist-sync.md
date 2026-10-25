@@ -37,7 +37,7 @@ Ein tatsächlicher Kontotest mit dem vom Nutzer eingetragenen API-Key bleibt erf
 
 Technische Grundlage: [aktuelle Todoist API v1](https://developer.todoist.com/api/v1/).
 
-Prüfstand: **197 XCTest-Tests, 12 bewusst ausgelassen, 0 Fehler**; darunter 18 neue Meeting-/Todoist-Policy-Tests. **56 zusätzliche Kernprüfungen bestanden.** Die vollständige Suite enthält die lokale LLM-Prüfung und die synthetische Oberflächendarstellung.
+Letzter vollständiger Lauf vor der Eingabefeld-Korrektur: **197 XCTest-Tests, 12 bewusst ausgelassen, 0 Fehler**; darunter 18 neue Meeting-/Todoist-Policy-Tests. **56 zusätzliche Kernprüfungen bestanden.** Die vollständige Suite enthält die lokale LLM-Prüfung und die synthetische Oberflächendarstellung.
 
 ### Korrektur der Schlüsseleingabe
 

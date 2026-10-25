@@ -1,8 +1,10 @@
-# Fork adoption — 2026-10-25
+# Fork adoption — historical assessment, 2026-10-25
+
+This document records the assessment at adoption. Current behavior and completed work are documented in [README](../README.md). Xcode/Metal and local MLX are now available, code has been pushed to the development branch, and category/calendar filters were superseded by the user's later requirements. The bullets below describe the original changes identified at adoption.
 
 Source: https://github.com/cjonesde/recorder at f1ba832a52ef600d2be94bb549900d42845f1632 (MIT, original copyright retained).
 
-User explicitly approved replacing Parakeet/FluidAudio with WhisperKit and using this fork as the base. Original Parakeet work was copied to /private/tmp/recorder-before-fork before adoption; it was not falsely marked complete. Local Git history retains the initial security commit. No push.
+User explicitly approved replacing Parakeet/FluidAudio with WhisperKit and using this fork as the base. Original Parakeet work was copied to /private/tmp/recorder-before-fork before adoption; it was not falsely marked complete. Local Git history retains the initial security commit. This initial assessment preceded the later authorized pushes.
 
 ## Reusable implementation
 

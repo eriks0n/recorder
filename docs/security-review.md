@@ -1,3 +1,11 @@
+# Security review and implementation history
+
+Current documentation status: 25 October 2026, development branch `codex/meeting-task-inbox`. This file records successive review/implementation stages; counts and limitations in older sections refer to their respective stages. Current operation is described in [README](../README.md) and [meeting-scoped Todoist delivery](meeting-todoist-sync.md).
+
+Latest verified checks: full XCTest run 197 cases (12 deliberately skipped), subsequent API-key UI/Todoist run 34 cases including four new UI tests, 56 standalone core checks, and 13 secret-publication guard tests. The current source has 201 XCTest cases; these separate runs are not presented as one full 201-case run. Commit/push protection is installed locally and the read-only GitHub workflow passed. The detailed local audit remains outside the public repository. General local-storage and release-hardening limitations remain; successful tests do not establish absence of every vulnerability.
+
+## Chronological review
+
 # Initial security review — 2026-10-25
 
 Reviewed the initial source revision f1b5c74 before executing project scripts: all Swift sources, package manifest, shell scripts, plist and entitlements. No third-party package dependencies at baseline. No evidence of malicious payloads, command execution from meeting content, telemetry or hidden network destinations found. This is a source review, not a guarantee of absence of vulnerabilities.

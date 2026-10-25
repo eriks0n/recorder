@@ -8,7 +8,9 @@ Basis: [tobi/recorder](https://github.com/tobi/recorder), erweitert mit dem [For
 
 Die vollständige App wurde auf diesem Mac mit Xcode 27.1 und Apples Metal Toolchain gebaut und signiert. WhisperKit/SpeakerKit sowie die lokale MLX-Zusammenfassung sind integriert. Das bereits installierte Qwen3-4B-4bit-Modell wurde anhand eines künstlichen deutschen Meetings getestet: beide ausdrücklichen Aufgaben, gültige Belege und die genannte Frist wurden korrekt ausgegeben; eine fehlende Frist blieb leer.
 
-Prüfstand: **197 XCTest-Tests ohne Fehler, davon 12 bewusst ausgelassene Geräte-/Aufnahmetests**, sowie **56 zusätzliche Kernprüfungen**. Das ersetzt weiterhin nicht die Langlauf- und Qualitätsabnahme mit echten Meetings oder den Vergleich mehrerer LLM-Größen.
+Prüfstand: letzter vollständiger Lauf **197 XCTest-Tests, davon 12 bewusst ausgelassen, ohne Fehler**. Nach der Korrektur der API-Key-Eingabe zusätzlich **34 gezielte Eingabe-/Todoist-Tests ohne Fehler**, darunter vier neue UI-Tests. Außerdem **56 Kernprüfungen** und **13 Secret-Schutztests** bestanden. Das ersetzt weiterhin nicht die Langlauf- und Qualitätsabnahme mit echten Meetings oder den Vergleich mehrerer LLM-Größen.
+
+Dokumentationsstand: **25. Oktober 2026**, Entwicklungsbranch **`codex/meeting-task-inbox`**. Der Standardbranch `main` enthält noch die frühere Gemini-Version. Diese Anleitung beschreibt den Entwicklungsbranch.
 
 ## Bauen und starten
 
@@ -34,6 +36,12 @@ MLX Swift LM ist auf 2.29.3, WhisperKit auf 1.1.0 festgelegt; die genauen Abhän
 9. Das Zusammenfassungsmodell unter **Local** herunterladen. Deutsch/Englisch und automatische Erstellung sind einstellbar; manuelles Erstellen und Öffnen sind im Transkriptbereich verfügbar. Zuständige, Fristen und Belege werden validiert; gesprochene Anweisungen im Meeting lösen keine Aktionen aus. Die vier Abschnitte sind Executive Summary, Themen, Action Items und nächste Schritte.
 10. Bestehende Aufnahmen lassen sich über die Bibliothek erneut verarbeiten. Alte Markdown-Transkripte bleiben als Dateien lesbar. Strukturierte Transkripte lassen sich zur Namensbearbeitung wieder laden.
 
+## Sprecher später zuordnen
+
+Unter **Recent recordings → ⋯ → Transkript und Sprecher bearbeiten** eine gespeicherte Aufnahme öffnen und den Sprecher anklicken. Meetingbezogene Namen lassen sich auch nach Neustart und nach dem Löschen des Audios ändern. Anschließend die Zusammenfassung erneuern, damit die Aufgaben die aktuelle Zuordnung verwenden.
+
+Das Speichern eines dauerhaften Stimmprofils benötigt geeignete unbestätigte Stimmreferenzen. Diese bleiben nur im Arbeitsspeicher, bis Recorder beendet, Fingerprinting ausgeschaltet oder die Stimmreferenzen gelöscht werden. Danach ist ein erneuter Durchlauf mit aktiviertem Fingerprinting und noch vorhandenem Audio erforderlich. Zum späteren Anhören oder Anlegen von Stimmprofilen Audio zunächst aufbewahren.
+
 ## Automatische Aufbewahrung
 
 Unter **Settings → Local → Aufbewahrung** gibt es zwei unabhängige, standardmäßig ausgeschaltete Optionen.
@@ -42,7 +50,7 @@ Unter **Settings → Local → Aufbewahrung** gibt es zwei unabhängige, standar
 
 Mit **Alte Aufnahmedateien automatisch löschen** lässt sich zusätzlich festlegen, nach wie vielen Tagen alte Aufnahmedateien gelöscht werden. Die Funktion ist standardmäßig **aus**; als einstellbarer Anfangswert sind 30 Tage hinterlegt.
 
-Nach Aktivierung prüft die App beim Start und danach stündlich, solange sie läuft. Bei abgelaufenen Aufnahmen bleiben nur `transcript.md`, `transcript.json`, `summary.md` und `summary.json` erhalten, soweit vorhanden. Die JSON-Dateien enthalten die strukturierten Textdaten für spätere Bearbeitung. Audio, Rohaufnahmen, Metadaten-Dateien und alte Ergebnisgenerationen werden endgültig gelöscht. Zuerst werden die aktuellen Texte vollständig gesichert und geprüft; danach werden die übrigen Dateien entfernt. Aktive Aufnahmen und laufende Verarbeitung werden nicht unterbrochen. Aufnahmen ohne fertiges Transkript, unvollständige Ergebnisse und unsichere Verknüpfungen werden übersprungen. Die Bereinigung betrifft die konfigurierte Bibliothek und die bisherige Bibliothek unter Documents/Recordings, keine separat gespeicherten Stimmprofile.
+Nach Aktivierung prüft die App beim Start und danach stündlich, solange sie läuft. Bei abgelaufenen Aufnahmen bleiben nur `transcript.md`, `transcript.json`, `summary.md` und `summary.json` erhalten, soweit vorhanden. Die JSON-Dateien enthalten die strukturierten Textdaten für spätere Bearbeitung. Audio, Rohaufnahmen, Metadaten-Dateien und alte Ergebnisgenerationen werden endgültig gelöscht. Zuerst werden die aktuellen Texte vollständig gesichert und geprüft; danach werden die übrigen Dateien entfernt. Aktive Aufnahmen und laufende Verarbeitung werden nicht unterbrochen. Auch wartende oder fehlerhafte Verarbeitungsaufträge sperren die Bereinigung, bis sie abgeschlossen oder verworfen sind. Aufnahmen ohne fertiges Transkript, unvollständige Ergebnisse und unsichere Verknüpfungen werden übersprungen. Die Bereinigung betrifft die konfigurierte Bibliothek und die bisherige Bibliothek unter Documents/Recordings, keine separat gespeicherten Stimmprofile.
 
 **Jetzt bereinigen…** zeigt vor einer manuellen Bereinigung eine Bestätigung. Beim Entwickeln und Testen wurde diese Funktion ausschließlich mit temporären Testdateien ausgeführt; vorhandene Benutzeraufnahmen wurden nicht bereinigt.
 
@@ -52,7 +60,7 @@ Aufnahmen werden nach dem Speichern in einer dauerhaften Warteschlange verarbeit
 
 **Aufgaben-Inbox öffnen…** sammelt Aufgaben aus allen gespeicherten Zusammenfassungen. Ein Meeting wählen, über **Ich bin im Meeting…** den eigenen Sprecher bestimmen und **# Projekt / @ Tags** gemeinsam für alle offenen Aufgaben übernehmen. Zuständigkeit, Belege und Termine je Aufgabe prüfen und **Prüfen und für Todoist auswählen** anklicken. Anschließend ausschließlich eigene, ausgewählte Aufgaben dieses Meetings als Todoist-CSV exportieren oder mit **Mit Todoist synchronisieren…** direkt übertragen. Eine spätere Sprecherkorrektur verlangt erneute Prüfung; eigene Aufgabentitel bleiben erhalten. Termine werden aus dem Meetingdatum vorgeschlagen.
 
-Für direkte Übertragung unter **Settings → Todoist** einen persönlichen API-Key über **Verbindung prüfen und sicher speichern** im macOS-Schlüsselbund hinterlegen. Erst die ausdrücklich gewählten Aufgaben mit kurzen Belegen verlassen den Mac; Audio und vollständige Transkripte bleiben lokal. CSV funktioniert ohne Verbindung. Exportstatus und feste Auftragsnummern schützen vor unbeabsichtigten Wiederholungen. Eine CSV nur einmal importieren.
+Für direkte Übertragung unter **Settings → Todoist** den persönlichen API-Key in das umrandete Passwortfeld eingeben (tippen, **Einfügen** oder ⌘V) und mit **Verbindung prüfen und sicher speichern** im macOS-Schlüsselbund hinterlegen. Erst die ausdrücklich gewählten Aufgaben mit kurzen Belegen verlassen den Mac; Audio und vollständige Transkripte bleiben lokal. CSV funktioniert ohne Verbindung. Exportstatus und feste Auftragsnummern schützen vor unbeabsichtigten Wiederholungen. Eine CSV nur einmal importieren.
 
 Aktuelle Bedienung und Fehlerfälle: [Todoist je Meeting](docs/meeting-todoist-sync.md). Speicherorte und technische Grundlagen: [Aufgaben-Inbox und Todoist](docs/task-inbox-todoist.md).
 
@@ -104,7 +112,17 @@ Bewusstes Umgehen lokaler Hooks (`--no-verify`), Änderungen der Schutzskripte o
 RECORDER_TEST_LLM=1 ./scripts/test.sh -c release --filter MeetingSummaryIntegrationTests
 ```
 
-Aktueller Prüfstand: **197 XCTest-Tests ohne Fehler (12 ausgelassen)** und **56 Kernprüfungen bestanden**; vollständige MLX-Release-App gebaut und Signatur geprüft.
+Nachweise nach Änderung getrennt, damit gezielte Nachprüfungen nicht als neuer vollständiger Lauf gezählt werden:
+
+| Prüfung | Letzter nachgewiesener Stand |
+| --- | --- |
+| Vollständige XCTest-Suite mit lokalem LLM | 197 Tests, 12 Geräte-/Aufnahmefälle ausgelassen, 0 Fehler |
+| API-Key-Eingabe und Todoist nach UI-Korrektur | 34 Tests, einschließlich 4 neuer UI-Tests, 0 Fehler |
+| Unabhängige Kernprüfungen | 56 bestanden |
+| Commit-/Push-Schutz | 13 Tests bestanden; GitHub-Workflow erfolgreich |
+| App-Build | Vollständige MLX-App gebaut, Signatur geprüft |
+
+Der Quellstand enthält nach der UI-Ergänzung insgesamt 201 XCTest-Fälle; ein vollständiger Lauf aller 201 wird hier noch nicht behauptet.
 
 Die eigenständig ausführbaren Kernprüfungen brauchen weder Modelle noch Mikrofonzugriff. Sie prüfen Bereichs-/Modellfilter, Mehrdeutigkeit, Enrollment, Dateirechte, Belege, Zusammenfassungsgültigkeit, atomare Veröffentlichung, Abbruch und Audiokonvertierung mit synthetischen Testtönen. Die geerbten XCTest-Tests sind im Repository erhalten. Tests mit echten Geräten/Modellen sind opt-in und verwenden die in den Testdateien dokumentierten Umgebungsvariablen. Die ausgelassenen Geräte-/Aufnahmefälle werden hier nicht als bestanden gewertet.
 

@@ -2,9 +2,9 @@
 
 Stand: 25. Oktober 2026 · Zielplattform: Lennarts Apple-Silicon-Mac · Ausgangspunkt: https://github.com/tobi/recorder
 
-Status: Umsetzungsplan, noch keine Implementierung. Nach dem Klonen wird der aktuelle Code geprüft und der Plan bei Bedarf angepasst. Alle Typ- und Dateinamen sind Entwurfsentscheidungen, keine Aussage über bestehende SDK-APIs.
+Status: ursprünglicher Entwurf mit nachgeführtem Umsetzungsstand. Die App und die ausdrücklich beauftragte Aufgaben-Inbox/Todoist-Erweiterung sind implementiert; reale Meeting-/Langlaufabnahme bleibt offen. Aktuelle Bedienung und Prüfnachweise stehen im [README](../README.md) und in [Todoist je Meeting](meeting-todoist-sync.md). Die ursprünglichen Planabschnitte ab „1. Ziel“ dokumentieren historische Anforderungen und sind keine aktuelle Bedienungsanleitung.
 
-Der Plan ist in zwei Stufen geteilt: **V1** liefert schnell ein im Alltag nutzbares Werkzeug. **V2** ergänzt Robustheit und Komfort, sobald sich V1 bewährt hat. V2 wird erst begonnen, wenn Lennart V1 abgenommen hat.
+Der Plan ist in zwei Stufen geteilt: **V1** liefert schnell ein im Alltag nutzbares Werkzeug. **V2** ergänzt Robustheit und Komfort, sobald sich V1 bewährt hat. Weitere V2-Arbeiten erfordern eine gesonderte Beauftragung; die später ausdrücklich beauftragte Aufgaben-Inbox/Todoist-Erweiterung ist unten als Abweichung erfasst.
 
 ---
 
@@ -12,7 +12,7 @@ Der Plan ist in zwei Stufen geteilt: **V1** liefert schnell ein im Alltag nutzba
 
 **Aktuelle Nutzeränderung:** Intern/extern und Kalenderteilnehmerfilter entfallen. Ein einzelner Schalter aktiviert Stimmanalyse, Matching und Enrollment; ausgeschaltet werden keine Profile geladen oder verwendet. Die folgenden ursprünglichen Planabschnitte zu Kategorien/Kalenderfiltern sind dadurch überholt. Zusätzlich gibt es eine standardmäßig ausgeschaltete Sofortlöschung von Audio nach erfolgreicher Transkription und Zusammenfassung; sie erzwingt den vollständigen Offline-Durchlauf und die automatische Zusammenfassung. Fehler oder Abbruch behalten Wiederherstellungs-Audio. Die bestehende zeitgesteuerte Aufbewahrung bleibt unabhängig davon verfügbar.
 
-Der Nutzer hat die Tests mit echten Aufnahmen auf später verschoben und ausdrücklich die Übernahme von `cjonesde/recorder` mit WhisperKit statt Parakeet/FluidAudio genehmigt. Diese Entscheidung hat Vorrang vor den ursprünglichen Modellvorgaben. V2 bleibt außerhalb des Auftrags.
+Der Nutzer hat die Tests mit echten Aufnahmen auf später verschoben und ausdrücklich die Übernahme von `cjonesde/recorder` mit WhisperKit statt Parakeet/FluidAudio genehmigt. Diese Entscheidung hat Vorrang vor den ursprünglichen Modellvorgaben. Weitere V2-Arbeiten bleiben außerhalb des Auftrags; die unten dokumentierte Aufgaben-Inbox/Todoist-Erweiterung ist ausdrücklich beauftragt.
 
 - Sicherheitsprüfung des ursprünglichen Quellstands vor Ausführung: dokumentiert in `docs/security-review.md`; keine Hinweise auf bösartigen Code gefunden, keine Garantie vollständiger Schwachstellenfreiheit.
 - P0: Quellprüfung, feste Bibliotheks-/Modellrevisionen und lokaler Build erledigt. Echter Modellvergleich, Download-/RAM-Messwerte und Aufnahmeprüfung bleiben offen. Anfangs nur CLT-Umgebung; inzwischen vollständiges Xcode 27.1 samt Metal installiert und erfolgreich verwendet. Kein vorgetäuschter P0-Pass.
@@ -28,7 +28,7 @@ V1 ist damit als Implementierung fortgeschritten, aber noch nicht vollständig a
 
 ---
 
-## 1. Ziel
+## 1. Ziel (ursprünglicher Entwurf)
 
 Eine native macOS-App nimmt Meetings auf, transkribiert sie lokal (Deutsch und Englisch), trennt Sprecher, erkennt bestätigte Personen in späteren Meetings wieder und erstellt eine lokale Zusammenfassung mit Aufgaben. Audio, Texte und Stimmprofile verlassen den Mac nicht. Kein eigener Server, keine Python-Laufzeit im Produkt, kein automatischer Cloud-Fallback.
 
