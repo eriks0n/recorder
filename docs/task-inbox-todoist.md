@@ -2,6 +2,8 @@
 
 Stand: 25. Oktober 2026. Neuer Branch: `codex/meeting-task-inbox`. Vom Nutzer ausdrücklich beauftragte Erweiterung des bisherigen Umfangs.
 
+**Aktueller Bedienablauf:** Die nachfolgende ursprüngliche Beschreibung wurde um eine Meeting-Auswahl und gemeinsame Projekt-/Tag-Vorgaben erweitert. Exportiert werden jetzt ausschließlich eigene Aufgaben. Globale Namensvergleiche und Fremdzuweisungen werden dafür nicht mehr verwendet. Maßgeblich ist [Todoist je Meeting](meeting-todoist-sync.md).
+
 ## Reihenfolge der Umsetzung
 
 1. Dauerhafte Verarbeitungswarteschlange.
