@@ -70,6 +70,30 @@ Neue Aufnahmen liegen standardmäßig unter `~/Library/Application Support/Recor
 
 Modelle und bestätigte Stimmprofile liegen separat in Application Support. Neue private Verzeichnisse erhalten Rechte `0700`, private Datendateien `0600`. Die App fügt keine eigene Verschlüsselung hinzu. FileVault ist eine Betriebssystemfunktion. Keine Audiodaten oder Stimmmerkmale gehören ins Git-Repository oder in Logs. Profillöschen entfernt Stimmmerkmale; bewusst vergebene Meetingnamen bleiben Teil des Transkripts.
 
+## Schutz vor versehentlich veröffentlichten Secrets
+
+Die `.gitignore` schließt alle `.env`-Varianten (auch verschachtelt und Beispiele), Credential-Dateien, private Schlüssel/Zertifikate und private Laufzeitdaten aus. Ein zusätzliches Dateiverbot erkennt solche Pfade auch bei `git add -f`. Gitleaks prüft die Inhalte auf bekannte Schlüssel- und Secret-Muster.
+
+Für **jeden neuen Clone** einmal aktivieren:
+
+```sh
+./scripts/setup-security.sh
+```
+
+Das installiert Gitleaks 8.30.1 mit festgelegter SHA-256-Prüfsumme in den ignorierten Build-Ordner und installiert die versionierten Schutzprüfungen zusätzlich im lokalen Git-Verzeichnis. Dadurch bleiben sie bei Branchwechseln und nach einer Bereinigung von `.build` aktiv. Ein vorhandener anderer Hooks-Pfad wird nicht überschrieben. Nach Änderungen an den Schutzskripten das Setup erneut ausführen, um die lokal installierte Kopie zu aktualisieren. Vor Commits werden die vorgemerkten Dateien geprüft; vor Pushes die gesamte erreichbare Historie einschließlich ausdrücklich gepushter Commit-IDs. Fehlender Scanner und Scannerfehler blockieren den Vorgang. Ein blockierter Commit verändert oder löscht keine privaten Dateien.
+
+Zusätzlich prüft der GitHub-Workflow **Secret protection** Pushes und Pull Requests mit derselben Policy. Der Scanner gibt keine Secret-Werte aus; rohe Fundberichte werden nicht veröffentlicht. Der Workflow verwendet ausschließlich Leserechte und einen auf einen Commit festgelegten Checkout-Schritt.
+
+Manuell prüfen:
+
+```sh
+python3 scripts/test-secret-protection.py
+python3 scripts/check-secrets.py staged
+python3 scripts/check-secrets.py history
+```
+
+Bewusstes Umgehen lokaler Hooks (`--no-verify`), Änderungen der Schutzskripte oder bislang unbekannte Secret-Formate lassen sich dadurch nicht absolut ausschließen. GitHub-CI erkennt Probleme erst nach dem Push; für verbindliche Merge-Sperren muss **Secret protection / scan** zusätzlich als erforderliche Prüfung in den Branch-Regeln hinterlegt sein. Bereits versionierte Secrets werden durch `.gitignore` nicht rückwirkend entfernt und müssten separat gesperrt und aus der Historie bereinigt werden.
+
 ## Prüfungen
 
 ```sh

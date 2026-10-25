@@ -43,3 +43,53 @@ current-result.json
 current-summary.json
 Results/
 Summaries/
+
+# Environment files: no exceptions, including examples and nested variants
+.[eE][nN][vV]*
+*.[eE][nN][vV]
+*.[eE][nN][vV].*
+.envrc
+.direnv/
+
+# Credentials, private keys and signing material
+credentials*
+secrets*
+.secret*
+.git-credentials
+.netrc
+.npmrc
+.pypirc
+.aws/
+.ssh/
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+*.keystore
+*.mobileprovision
+id_rsa*
+id_ed25519*
+
+# Private runtime data and exports (also when accidentally copied into the repo)
+TaskInbox/
+inbox.json
+processing-queue.json
+profiles.json.*
+*.csv
+*.aac
+*.aiff
+*.aif
+*.ogg
+*.opus
+
+# Infrastructure state may contain plaintext credentials
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+*.tfvars.json
+
+# Local Python scanner/test caches
+__pycache__/
+*.py[cod]
