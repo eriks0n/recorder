@@ -178,6 +178,8 @@ final class RecorderModel {
         let startedAt: Date
     }
     @ObservationIgnored private var lastTranscription: PendingTranscription?
+    let taskInbox = TaskInbox()
+    var taskInboxStatus: String?
     let processingQueue = ProcessingQueue()
     @ObservationIgnored private var activeProcessingJob: UUID?
     @ObservationIgnored private var queueWorker: Task<Void, Never>?
@@ -196,6 +198,7 @@ final class RecorderModel {
 
         // Load prior recordings from disk so they survive restarts.
         refreshRecordings()
+        importSavedActions()
         startRetentionChecks()
         pumpProcessingQueue()
 
@@ -678,7 +681,7 @@ final class RecorderModel {
     /// rename re-renders it and stays idempotent across repeated applications.
     func renameSpeaker(id: String, to name: String) {
         guard !retentionRunning else { return }
-        cancelProcessing()
+        if activeProcessingJob != nil { cancelProcessing(requeue: true) }
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty,
               let document = lastDocument,
@@ -878,6 +881,9 @@ final class RecorderModel {
             transcriptionState = .failed("Could not write the transcript: \(error.localizedDescription)")
             return
         }
+        if let id = document.meetingRecord?.id {
+            do { try taskInbox.invalidate(meetingID: id) } catch { taskInboxStatus = error.localizedDescription }
+        }
         lastTranscriptText = markdown
         lastTranscriptURL = markdownURL
         // Normalize dates to the persisted representation before hashing for summaries.
@@ -917,6 +923,7 @@ final class RecorderModel {
             retentionRunning = false
             retentionStatus = "\(report.cleaned) bereinigt · \(report.skipped) übersprungen" + (report.failed > 0 ? " · \(report.failed) wegen Dateifehlern unverändert" : "")
             refreshRecordings()
+            pumpProcessingQueue()
             if let pending = lastTranscription {
                 let entries = RecordingsLibrary.entries(roots: roots)
                 if let entry = entries.first(where: { $0.folderURL.standardizedFileURL.path == pending.folderURL.standardizedFileURL.path }) {
@@ -950,7 +957,7 @@ final class RecorderModel {
                     if let url = lastTranscriptURL { transcriptionState = .done(url) }
                 }
             }
-            refreshRecordings(); statusMessage = "Meetingname gespeichert"; return true
+            refreshRecordings(); importSavedActions(); statusMessage = "Meetingname gespeichert"; return true
         } catch { statusMessage = error.localizedDescription; return false }
     }
 
@@ -1070,6 +1077,7 @@ final class RecorderModel {
             throw LocalError.message("Transkript wurde geändert. Bitte die Zusammenfassung erneut erstellen.")
         }
         try SummaryRepository.publish(result, transcript: input, folder: job.folder)
+        try taskInbox.ingest(result, transcript: input)
         summaryStatus = "Zusammenfassung gespeichert"
         if job.deleteAudio {
             do {
@@ -1082,6 +1090,34 @@ final class RecorderModel {
         let pending = PendingTranscription(audioURL: refreshed.audioName.map { job.folder.appendingPathComponent($0) }, folderURL: job.folder, meetingTitle: job.title, attendees: job.attendees, startedAt: job.startedAt)
         let markdown = (try TranscriptRepository.currentJSON(in: job.folder))?.deletingLastPathComponent().appendingPathComponent("transcript.md") ?? job.folder.appendingPathComponent("transcript.md")
         presentProcessed(refreshed, pending: pending, markdown: markdown)
+    }
+    func importSavedActions() {
+        guard !retentionRunning else { return }
+        var imported = 0
+        for entry in RecordingsLibrary.entries(roots: RecordingsLibrary.roots()) where entry.hasTranscript {
+            do {
+                let doc = try TranscriptDocument.load(from: entry.folderURL.appendingPathComponent("transcript.json"))
+                let markdown = try SummaryRepository.current(in: entry.folderURL, hash: doc.summaryInput.hash)
+                let json = markdown.deletingLastPathComponent().appendingPathComponent("summary.json")
+                try RecordingRetention.requireContainedRegularFile(json, in: entry.folderURL)
+                try taskInbox.ingest(PrivateStorage.read(MeetingSummary.self, from: json), transcript: doc.summaryInput)
+                imported += 1
+            } catch {
+                if let doc = try? TranscriptDocument.load(from: entry.folderURL.appendingPathComponent("transcript.json")), let id = doc.meetingRecord?.id {
+                    do { try taskInbox.invalidate(meetingID: id) } catch { taskInboxStatus = error.localizedDescription }
+                }
+            }
+        }
+        taskInboxStatus = "\(imported) Meeting-Zusammenfassungen eingelesen"
+    }
+    func saveTaskDraft(_ draft: TaskDraft, review: Bool = false) {
+        do { try taskInbox.save(draft); if review { try taskInbox.review(draft.id) }; taskInboxStatus = "Aufgabe gespeichert" }
+        catch { taskInboxStatus = error.localizedDescription }
+    }
+    func discardProcessingJob(_ id: UUID) {
+        guard id != activeProcessingJob else { return }
+        do { try processingQueue.update(id, state: .done); pumpProcessingQueue() }
+        catch { queueStatus = error.localizedDescription }
     }
     func showSavedTranscript(_ entry: RecordingEntry) {
         guard !retentionRunning else { return }

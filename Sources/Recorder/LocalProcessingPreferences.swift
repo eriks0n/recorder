@@ -14,7 +14,12 @@ struct LocalProcessingPreferences: View {
                         Text(job.title ?? "Aufnahme")
                         Text(job.state == .running ? "Wird verarbeitet" : job.state == .failed ? "Fehlgeschlagen" : "Wartet").font(.caption)
                         if let error = job.error { Text(error).font(.caption).foregroundStyle(.secondary) }
-                        if job.state == .failed { Button("Erneut versuchen") { model.retryProcessingJob(job.id) } }
+                        if job.state == .failed {
+                            HStack {
+                                Button("Erneut versuchen") { model.retryProcessingJob(job.id) }
+                                Button("Auftrag verwerfen") { model.discardProcessingJob(job.id) }
+                            }
+                        }
                     }
                 }
             }

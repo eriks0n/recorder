@@ -1,0 +1,189 @@
+import Foundation
+import Observation
+import CryptoKit
+
+enum TaskResponsibility: String, Codable, CaseIterable { case mine, waiting, unresolved }
+struct TaskDraft: Codable, Identifiable, Equatable {
+    var id = UUID()
+    var meetingID: UUID
+    var meetingTitle: String
+    var scope: String
+    var meetingDate: Date
+    var sourceHash: String
+    var sourceKey: String
+    var sourceTask: String
+    var sourceOwner: String?
+    var ownerID: String?
+    var ownerName: String?
+    var sourceDeadline: String?
+    var kind: String
+    var evidence: [SummaryEvidence]
+    var evidenceTimes: [String]
+    var title: String
+    var notes = ""
+    var responsibility: TaskResponsibility = .unresolved
+    var deadline = "" // YYYY-MM-DD; empty explicitly means no deadline.
+    var scheduled = ""
+    var dateHint: String?
+    var reviewed = false
+    var selected = false
+    var stale = false
+    var dismissed = false
+    var projectID = ""
+    var projectName = ""
+    var sectionID = ""
+    var sectionName = ""
+    var labels = ""
+    var priority = 4 // UI/CSV convention: p1 highest, p4 normal.
+    var assigneeID = ""
+    var assigneeName = ""
+    var exportChannel: String?
+    var remoteID: String?
+    var exportError: String?
+    var attemptID: UUID?
+    var frozenPayload: Data?
+    var locked: Bool { exportChannel != nil || attemptID != nil }
+    var exportable: Bool { reviewed && !stale && !dismissed && kind != "cancelled" && responsibility != .unresolved && !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && exportChannel == nil }
+    var exportTitle: String { responsibility == .waiting ? "Warten auf \(ownerName ?? "Rückmeldung"): \(title)" : title }
+    var exportDescription: String {
+        var lines = ["Meeting: \(meetingTitle)", "Bereich: \(scope)", "Aufnahme: \(ISO8601DateFormatter().string(from: meetingDate))"]
+        if let ownerName { lines.append("Verantwortlich im Meeting: \(ownerName)") }
+        if let sourceDeadline { lines.append("Genannte Frist: \(sourceDeadline)") }
+        lines.append(contentsOf: zip(evidence, evidenceTimes).map { "\($0.1) [\($0.0.turnID)]: \($0.0.quote)" })
+        if !notes.isEmpty { lines.append(notes) }
+        lines.append("Recorder-Aufgabe: \(id.uuidString)")
+        return lines.joined(separator: "\n")
+    }
+}
+
+/// Only deterministic suggestions; exporting always requires human review.
+enum MeetingDateResolver {
+    static func validISO(_ text: String) -> Bool {
+        guard text.range(of: #"^\d{4}-\d{2}-\d{2}$"#, options: .regularExpression) != nil else { return false }
+        let f = DateFormatter(); f.calendar = Calendar(identifier: .gregorian); f.locale = Locale(identifier: "en_US_POSIX"); f.timeZone = TimeZone(secondsFromGMT: 0); f.dateFormat = "yyyy-MM-dd"; f.isLenient = false
+        return f.date(from: text).map { f.string(from: $0) == text } ?? false
+    }
+    static func suggest(_ raw: String?, meeting: Date, timezone: TimeZone = .current) -> String? {
+        guard let raw else { return nil }
+        var text = raw.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        for prefix in ["bis ", "am ", "by ", "on "] where text.hasPrefix(prefix) { text = String(text.dropFirst(prefix.count)) }
+        if validISO(text) { return text }
+        var cal = Calendar(identifier: .gregorian); cal.timeZone = timezone
+        var date: Date?
+        if ["heute", "today"].contains(text) { date = meeting }
+        else if ["morgen", "tomorrow"].contains(text) { date = cal.date(byAdding: .day, value: 1, to: meeting) }
+        else if ["übermorgen"].contains(text) { date = cal.date(byAdding: .day, value: 2, to: meeting) }
+        else {
+            let weekdays = ["sonntag": 1, "sunday": 1, "montag": 2, "monday": 2, "dienstag": 3, "tuesday": 3, "mittwoch": 4, "wednesday": 4, "donnerstag": 5, "thursday": 5, "freitag": 6, "friday": 6, "samstag": 7, "saturday": 7]
+            if let weekday = weekdays[text] { date = cal.date(byAdding: .day, value: (weekday - cal.component(.weekday, from: meeting) + 7) % 7, to: meeting) }
+            else {
+                let f = DateFormatter(); f.calendar = cal; f.timeZone = timezone; f.locale = Locale(identifier: "de_DE"); f.isLenient = false
+                f.dateFormat = "dd.MM.yyyy"
+                date = f.date(from: text)
+            }
+        }
+        guard let date else { return nil }
+        let f = DateFormatter(); f.calendar = cal; f.timeZone = timezone; f.locale = Locale(identifier: "en_US_POSIX"); f.dateFormat = "yyyy-MM-dd"
+        return f.string(from: date)
+    }
+}
+struct TaskProjectMapping: Codable, Equatable {
+    var projectID: String; var projectName: String; var sectionID: String; var sectionName: String
+}
+struct TaskInboxData: Codable {
+    var schemaVersion = 1
+    var drafts: [TaskDraft] = []
+    var myName = ""
+    var mappings: [String: TaskProjectMapping] = [:]
+}
+@MainActor @Observable final class TaskInbox {
+    private(set) var data = TaskInboxData()
+    private(set) var storageError: String?
+    @ObservationIgnored let url: URL
+    init(url: URL = PrivateStorage.applicationRoot.appendingPathComponent("TaskInbox/inbox.json")) {
+        self.url = url
+        if FileManager.default.fileExists(atPath: url.path) {
+            do {
+                data = try PrivateStorage.read(TaskInboxData.self, from: url)
+                guard data.schemaVersion == 1 else { throw LocalError.message("Unbekannte Aufgaben-Version") }
+            } catch { storageError = error.localizedDescription }
+        }
+    }
+    func edit(_ edit: (inout TaskInboxData) throws -> Void) throws {
+        guard storageError == nil else { throw LocalError.message("Aufgaben-Inbox konnte nicht gelesen werden: \(storageError!)") }
+        let old = data
+        do { try edit(&data); try PrivateStorage.save(data, to: url) }
+        catch { data = old; throw error }
+    }
+    func save(_ draft: TaskDraft) throws {
+        try edit { data in
+            guard let i = data.drafts.firstIndex(where: { $0.id == draft.id }) else { return }
+            guard !data.drafts[i].locked else { throw LocalError.message("Exportierte oder bereits gesendete Aufgaben sind gesperrt.") }
+            guard data.drafts[i].sourceHash == draft.sourceHash, data.drafts[i].sourceKey == draft.sourceKey,
+                  data.drafts[i].kind == draft.kind, data.drafts[i].evidence == draft.evidence else { throw LocalError.message("Die Quelle wurde inzwischen geändert. Bitte den Entwurf neu öffnen.") }
+            var draft = draft
+            draft.stale = data.drafts[i].stale
+            if data.drafts[i] != draft { draft.reviewed = false; draft.selected = false }
+            data.drafts[i] = draft
+        }
+    }
+    func review(_ id: UUID) throws {
+        try edit { data in
+            guard let i = data.drafts.firstIndex(where: { $0.id == id }) else { return }
+            let d = data.drafts[i]
+            guard !d.locked, !d.stale, d.kind != "cancelled", d.responsibility != .unresolved, !d.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                  d.deadline.isEmpty || MeetingDateResolver.validISO(d.deadline), d.scheduled.isEmpty || MeetingDateResolver.validISO(d.scheduled), (1...4).contains(d.priority),
+                  d.sectionID.isEmpty || !d.projectID.isEmpty else { throw LocalError.message("Bitte Zuständigkeit, Titel, Projekt und Datumsfelder prüfen.") }
+            data.drafts[i].reviewed = true; data.drafts[i].selected = true
+        }
+    }
+    func invalidate(meetingID: UUID) throws {
+        try edit { data in
+            for i in data.drafts.indices where data.drafts[i].meetingID == meetingID && !data.drafts[i].locked {
+                data.drafts[i].stale = true; data.drafts[i].reviewed = false; data.drafts[i].selected = false
+            }
+        }
+    }
+    func ingest(_ summary: MeetingSummary, transcript: MeetingTranscript) throws {
+        guard summary.meetingID == transcript.meeting.id, summary.transcriptHash == transcript.hash else { throw LocalError.message("Aufgabenquelle ist veraltet.") }
+        try SummaryValidator.validate(summary.content, transcript: transcript)
+        try edit { data in
+            let meeting = transcript.meeting
+            let actions = summary.content.actionItems
+            var seen: Set<UUID> = []
+            for action in actions {
+                let turns = action.evidence.map(\.turnID).sorted().joined(separator: ",")
+                let normalized = action.task.lowercased().split(whereSeparator: \.isWhitespace).joined(separator: " ")
+                let key = SHA256.hash(data: Data("\(meeting.id)|\(turns)|\(normalized)".utf8)).map { String(format: "%02x", $0) }.joined()
+                let matching = data.drafts.indices.filter { data.drafts[$0].meetingID == meeting.id && data.drafts[$0].evidence.map(\.turnID).sorted().joined(separator: ",") == turns }
+                let uniqueSource = actions.filter { $0.evidence.map(\.turnID).sorted().joined(separator: ",") == turns }.count == 1
+                let index = data.drafts.firstIndex { $0.sourceKey == key } ?? (matching.count == 1 && uniqueSource ? matching.first : nil)
+                let ownerID = action.owner.flatMap { owner in transcript.assignments.first { $0.id == owner || $0.name == owner }?.id }
+                let ownerName = ownerID.map { transcript.label($0) } ?? action.owner
+                let suggestion = MeetingDateResolver.suggest(action.deadline, meeting: meeting.startedAt)
+                let times = action.evidence.map { ref in MeetingTranscript.timestamp(transcript.turns.first { $0.id == ref.turnID }?.start ?? 0) }
+                if let i = index {
+                    seen.insert(data.drafts[i].id)
+                    guard !data.drafts[i].locked else { continue }
+                    let changed = data.drafts[i].sourceHash != transcript.hash || data.drafts[i].sourceTask != action.task || data.drafts[i].sourceOwner != action.owner || data.drafts[i].sourceDeadline != action.deadline || data.drafts[i].kind != action.kind || data.drafts[i].evidence != action.evidence
+                    data.drafts[i].sourceHash = transcript.hash; data.drafts[i].sourceKey = key; data.drafts[i].stale = false
+                    data.drafts[i].sourceTask = action.task; data.drafts[i].sourceOwner = action.owner; data.drafts[i].sourceDeadline = action.deadline
+                    data.drafts[i].ownerID = ownerID; data.drafts[i].ownerName = ownerName; data.drafts[i].evidence = action.evidence; data.drafts[i].evidenceTimes = times
+                    data.drafts[i].meetingTitle = meeting.title ?? "Aufnahme"; data.drafts[i].kind = action.kind
+                    if changed { data.drafts[i].reviewed = false; data.drafts[i].selected = false }
+                } else {
+                    var d = TaskDraft(meetingID: meeting.id, meetingTitle: meeting.title ?? "Aufnahme", scope: meeting.scope, meetingDate: meeting.startedAt,
+                        sourceHash: transcript.hash, sourceKey: key, sourceTask: action.task, sourceOwner: action.owner, ownerID: ownerID, ownerName: ownerName,
+                        sourceDeadline: action.deadline, kind: action.kind, evidence: action.evidence, evidenceTimes: times, title: action.task)
+                    d.deadline = suggestion ?? ""; d.dateHint = action.deadline == nil ? nil : suggestion == nil ? "Frist unklar – bitte prüfen" : "Datum aus dem Meetingdatum abgeleitet – bitte bestätigen"
+                    if !data.myName.isEmpty, ownerName?.caseInsensitiveCompare(data.myName) == .orderedSame { d.responsibility = .mine }
+                    if let mapping = data.mappings[meeting.scope] { d.projectID = mapping.projectID; d.projectName = mapping.projectName; d.sectionID = mapping.sectionID; d.sectionName = mapping.sectionName }
+                    data.drafts.append(d); seen.insert(d.id)
+                }
+            }
+            for i in data.drafts.indices where data.drafts[i].meetingID == meeting.id && !seen.contains(data.drafts[i].id) && !data.drafts[i].locked {
+                data.drafts[i].stale = true; data.drafts[i].reviewed = false; data.drafts[i].selected = false
+            }
+        }
+    }
+}

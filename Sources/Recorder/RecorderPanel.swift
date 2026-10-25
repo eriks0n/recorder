@@ -71,6 +71,7 @@ struct RecorderPanel: View {
 
             Divider()
 
+            Button("Aufgaben-Inbox öffnen…") { TaskInboxWindowController.shared.show(model: model) }
             meters
 
             Divider()
