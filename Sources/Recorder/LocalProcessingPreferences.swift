@@ -2,6 +2,7 @@ import SwiftUI
 
 struct LocalProcessingPreferences: View {
     @Environment(RecorderModel.self) private var model
+    @State private var confirmCleanup = false
     var body: some View {
         @Bindable var model = model
         Form {
@@ -27,6 +28,25 @@ struct LocalProcessingPreferences: View {
                     Button("Kalendervorschlag übernehmen: \(proposal)") { model.customerScope = proposal }
                 }
                 Text("Vor der Aufnahme bestätigen. Ohne Zuordnung: default. Profile werden nur innerhalb dieses Bereichs verglichen.").font(.caption)
+            }
+            Section("Aufbewahrung") {
+                Toggle("Alte Aufnahmedateien automatisch löschen", isOn: $model.retentionEnabled)
+                if model.retentionEnabled {
+                    Stepper("Nach \(model.retentionDays) Tagen", value: $model.retentionDays, in: 1...3650)
+                    Text("Erhalten bleiben die Text-Transkription und Zusammenfassung mit ihren Textdaten (Markdown und JSON). Alle anderen Dateien dieser Aufnahme werden unwiderruflich gelöscht. Ohne fertiges Transkript wird nichts gelöscht.")
+                        .font(.caption)
+                    Text("Prüfung beim App-Start und stündlich, solange Recorder geöffnet ist. Aktive Aufnahmen und laufende Verarbeitung werden übersprungen.")
+                        .font(.caption).foregroundStyle(.secondary)
+                    Button("Jetzt bereinigen…") { confirmCleanup = true }
+                        .disabled(model.retentionRunning || model.state != .idle || model.transcriptionState == .running || model.summaryRunning)
+                        .confirmationDialog("Alte Aufnahmedateien jetzt endgültig löschen?", isPresented: $confirmCleanup) {
+                            Button("Jetzt bereinigen", role: .destructive) { model.runRetentionCleanup() }
+                            Button("Abbrechen", role: .cancel) {}
+                        } message: {
+                            Text("Bei Aufnahmen ab \(model.retentionDays) Tagen bleiben nur Transkript und Zusammenfassung. Audio und übrige Dateien werden endgültig gelöscht.")
+                        }
+                }
+                if let status = model.retentionStatus { Text(status).font(.caption).foregroundStyle(.secondary) }
             }
             Section("Zusammenfassung") {
                 Toggle("Nach dem Offline-Transkript automatisch erstellen", isOn: $model.autoSummary)

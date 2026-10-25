@@ -10,6 +10,19 @@ import AVFoundation
 @Observable
 final class RecorderModel {
 
+    @ObservationIgnored private var appLaunchObserver: NSObjectProtocol?
+
+    init() {
+        // MenuBarExtra content is lazy. Initialize scheduled cleanup even when the panel is never opened.
+        appLaunchObserver = NotificationCenter.default.addObserver(forName: NSApplication.didFinishLaunchingNotification,
+                                                                   object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor [weak self] in self?.onAppear() }
+        }
+    }
+    deinit {
+        if let observer = appLaunchObserver { NotificationCenter.default.removeObserver(observer) }
+    }
+
     // MARK: - Observable UI state
 
     var state: RecorderState = .idle
@@ -102,6 +115,14 @@ final class RecorderModel {
     /// The most recent recordings on disk (loaded at launch + after changes).
     var recentRecordings: [RecordingEntry] = []
 
+    var recordingNameDraft = ""
+    var retentionEnabled = false { didSet { Preferences.retentionEnabled = retentionEnabled } }
+    var retentionDays = 30 { didSet { Preferences.retentionDays = retentionDays } }
+    var retentionRunning = false
+    var retentionStatus: String?
+    @ObservationIgnored private var retentionTimer: Timer?
+    @ObservationIgnored private var pendingSaveFolders: Set<URL> = []
+
     var customerScope = "default"
     var summaryStatus: String?
     var summaryRunning = false
@@ -161,6 +182,7 @@ final class RecorderModel {
 
         // Load prior recordings from disk so they survive restarts.
         refreshRecordings()
+        startRetentionChecks()
 
         // Biometric data should not outlive its purpose: drop voiceprints nobody named.
         speakerStore.prunePending()
@@ -243,12 +265,15 @@ final class RecorderModel {
         recordingPath = Preferences.recordingPath
         autoSummary = Preferences.autoSummary
         summaryLanguage = Preferences.summaryLanguage
+        retentionDays = Preferences.retentionDays
+        retentionEnabled = Preferences.retentionEnabled
     }
 
     // MARK: - Recording control
 
     func startRecording(meeting: Meeting?) {
         guard state == .idle else { return }
+        guard !retentionRunning else { statusMessage = "Dateien werden gerade bereinigt. Bitte kurz warten."; return }
 
         cancelProcessing()
         recordingGeneration = UUID()
@@ -261,9 +286,10 @@ final class RecorderModel {
         }
 
         let now = Date()
+        let meetingTitle = MeetingNaming.clean(recordingNameDraft) ?? meeting?.title
         let session: RecordingSession
         do {
-            session = try RecordingSession.create(now: now, meetingTitle: meeting?.title, mode: mode)
+            session = try RecordingSession.create(now: now, meetingTitle: meetingTitle, mode: mode)
         } catch {
             statusMessage = "Could not create recording folder: \(error.localizedDescription)"
             return
@@ -273,7 +299,7 @@ final class RecorderModel {
         activeMode = mode
         do {
             let metadata = MeetingRecord(scope: customerScope.isEmpty ? "default" : customerScope, startedAt: now,
-                                         title: meeting?.title, attendees: meeting?.attendees ?? [],
+                                         title: meetingTitle, attendees: meeting?.attendees ?? [],
                                          attendeeEmails: meeting?.attendeeEmails ?? [], hasCalendarEvent: meeting != nil)
             try PrivateStorage.save(metadata, to: session.folderURL.appendingPathComponent("meeting.json"))
         } catch { currentSession = nil; activeMeeting = nil; statusMessage = error.localizedDescription; return }
@@ -345,6 +371,7 @@ final class RecorderModel {
         }
 
         state = .recording
+        recordingNameDraft = ""
         statusMessage = nil
         startElapsedTimer(from: now)
     }
@@ -423,8 +450,9 @@ final class RecorderModel {
         let mode = activeMode
         let recordingGeneration = self.recordingGeneration
         let folderURL = session.folderURL
+        pendingSaveFolders.insert(folderURL)
         let startedAt = session.startedAt
-        let meetingTitle = activeMeeting?.title ?? session.meetingTitle
+        let meetingTitle = session.meetingTitle ?? activeMeeting?.title
         let attendees = activeMeeting?.attendees ?? []
 
         // Finalize the live transcript (transcribes the remaining tail) in
@@ -451,6 +479,7 @@ final class RecorderModel {
             statusMessage = "Finishing the transcript…"
             Task { [weak self] in
                 guard let self else { return }
+                defer { self.pendingSaveFolders.remove(folderURL) }
                 guard let liveResult = await liveTask?.value, !liveResult.isEmpty else {
                     self.transcriptionState = .failed("Nothing was transcribed, and no audio was kept.")
                     self.statusMessage = "Nothing to save"
@@ -481,7 +510,8 @@ final class RecorderModel {
         }
 
         // Mix off the main actor; keep raw CAFs regardless of outcome.
-        Task.detached(priority: .utility) {
+        Task.detached(priority: .utility) { [weak self] in
+            defer { Task { @MainActor [weak self] in self?.pendingSaveFolders.remove(folderURL) } }
             var mixError: Error? = nil
             do {
                 try StereoMixer.mix(
@@ -634,6 +664,7 @@ final class RecorderModel {
     /// The markdown is never patched. `transcript.json` is the source of truth, so a
     /// rename re-renders it and stays idempotent across repeated applications.
     func renameSpeaker(id: String, to name: String) {
+        guard !retentionRunning else { return }
         cancelProcessing()
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty,
@@ -655,7 +686,7 @@ final class RecorderModel {
 
     /// Transcribe a saved recording's audio with the local model.
     private func startTranscription(_ pending: PendingTranscription) {
-        guard state == .idle else { return }
+        guard state == .idle, !retentionRunning else { return }
         cancelProcessing()
         let operation = UUID(); processingID = operation
         lastTranscription = pending
@@ -805,6 +836,69 @@ final class RecorderModel {
         refreshRecordings()
     }
 
+    private func startRetentionChecks() {
+        retentionTimer?.invalidate()
+        let timer = Timer(timeInterval: 3600, repeats: true) { [weak self] _ in
+            Task { @MainActor [weak self] in self?.runRetentionCleanup() }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        retentionTimer = timer
+        runRetentionCleanup()
+    }
+    func runRetentionCleanup() {
+        guard retentionEnabled, !retentionRunning else { return }
+        guard state == .idle, transcriptionState != .running, !summaryRunning,
+              pendingSaveFolders.isEmpty, referencePlayer?.isPlaying != true else {
+            retentionStatus = "Bereinigung wird beim nächsten Prüflauf nach der Aufnahme oder Verarbeitung nachgeholt."
+            return
+        }
+        let roots = RecordingsLibrary.roots(), days = retentionDays
+        retentionRunning = true
+        retentionStatus = "Alte Aufnahmedateien werden bereinigt…"
+        Task {
+            let report = await Task.detached(priority: .utility) {
+                RecordingRetention.run(roots: roots, afterDays: days)
+            }.value
+            retentionRunning = false
+            retentionStatus = "\(report.cleaned) bereinigt · \(report.skipped) übersprungen" + (report.failed > 0 ? " · \(report.failed) wegen Dateifehlern unverändert" : "")
+            refreshRecordings()
+            if let pending = lastTranscription {
+                let entries = RecordingsLibrary.entries(roots: roots)
+                if let entry = entries.first(where: { $0.folderURL.standardizedFileURL.path == pending.folderURL.standardizedFileURL.path }) {
+                    lastTranscription = PendingTranscription(audioURL: entry.audioURL, folderURL: entry.folderURL,
+                                                            meetingTitle: entry.title, attendees: pending.attendees, startedAt: pending.startedAt)
+                    if lastDocument != nil, let url = entry.transcriptURL {
+                        lastDocument = try? TranscriptDocument.load(from: entry.folderURL.appendingPathComponent("transcript.json"))
+                        lastTranscriptURL = url
+                        lastTranscriptText = lastDocument?.renderMarkdown() ?? (try? String(contentsOf: url, encoding: .utf8))
+                        transcriptionState = .done(url)
+                    }
+                }
+            }
+        }
+    }
+    @discardableResult
+    func renameRecording(_ entry: RecordingEntry, to name: String) -> Bool {
+        guard state == .idle, transcriptionState != .running, !summaryRunning, !retentionRunning,
+              !pendingSaveFolders.contains(entry.folderURL) else {
+            statusMessage = "Bitte die laufende Verarbeitung zuerst beenden."; return false
+        }
+        do {
+            try MeetingNaming.rename(entry, to: name)
+            if let pending = lastTranscription, pending.folderURL.standardizedFileURL.path == entry.folderURL.standardizedFileURL.path {
+                lastTranscription = PendingTranscription(audioURL: pending.audioURL, folderURL: entry.folderURL,
+                                                        meetingTitle: MeetingNaming.clean(name), attendees: pending.attendees, startedAt: pending.startedAt)
+                if lastDocument != nil {
+                    lastDocument = try TranscriptDocument.load(from: entry.folderURL.appendingPathComponent("transcript.json"))
+                    lastTranscriptText = lastDocument?.renderMarkdown()
+                    lastTranscriptURL = (try TranscriptRepository.currentJSON(in: entry.folderURL))?.deletingLastPathComponent().appendingPathComponent("transcript.md") ?? entry.transcriptURL
+                    if let url = lastTranscriptURL { transcriptionState = .done(url) }
+                }
+            }
+            refreshRecordings(); statusMessage = "Meetingname gespeichert"; return true
+        } catch { statusMessage = error.localizedDescription; return false }
+    }
+
     func cancelProcessing() {
         processingTask?.cancel(); processingTask = nil; processingID = UUID()
         playbackTask?.cancel(); referencePlayer?.stop()
@@ -836,6 +930,7 @@ final class RecorderModel {
     }
     func cancelModelDownload() { downloadTask?.cancel() }
     func chooseRecordingFolder() {
+        guard !retentionRunning else { return }
         let panel = NSOpenPanel(); panel.canChooseDirectories = true; panel.canChooseFiles = false; panel.canCreateDirectories = true
         if panel.runModal() == .OK, let url = panel.url { recordingPath = url.path; refreshRecordings() }
     }
@@ -858,6 +953,7 @@ final class RecorderModel {
         return ["mobile documents", "clouddocs", "cloudstorage", "onedrive", "dropbox", "google drive"].contains { path.contains($0) }
     }
     func enrollSpeaker(id: String, name: String, category: String, email: String?) {
+        guard !retentionRunning else { return }
         guard let doc = lastDocument, let centroid = doc.speakerCentroidsID, let record = doc.meetingRecord else { statusMessage = "Bitte erneut verarbeiten und einen sauberen Abschnitt verwenden."; return }
         do {
             try speakerStore.enrollInternal(name: name, clusterID: id, pendingID: centroid, meeting: record, category: category, email: email)
@@ -865,11 +961,13 @@ final class RecorderModel {
         } catch { statusMessage = error.localizedDescription }
     }
     func rejectProposal(id: String) {
+        guard !retentionRunning else { return }
         guard var document = lastDocument, let pending = lastTranscription else { return }
         document.proposedNames?.removeValue(forKey: id)
         writeTranscript(document: document, pending: pending, keepStatus: false)
     }
     func playReference(id: String) {
+        guard !retentionRunning else { return }
         guard let doc = lastDocument, let pending = lastTranscription, let url = pending.audioURL,
               let line = doc.lines.first(where: { $0.speakerID == id && $0.overlap != true && ($0.endTime ?? $0.time) - $0.time >= 3 }) else { statusMessage = "Kein sauberer Referenzabschnitt verfügbar."; return }
         do {
@@ -881,7 +979,7 @@ final class RecorderModel {
         } catch { statusMessage = error.localizedDescription }
     }
     func summarize() {
-        guard state == .idle, lastDocument != nil else { return }
+        guard state == .idle, !retentionRunning, lastDocument != nil else { return }
         cancelProcessing(); let operation = UUID(); processingID = operation
         processingTask = Task { await generateSummary(operation: operation) }
     }
@@ -904,6 +1002,7 @@ final class RecorderModel {
         catch { if processingID == operation { summaryStatus = error.localizedDescription } }
     }
     func showSavedTranscript(_ entry: RecordingEntry) {
+        guard !retentionRunning else { return }
         cancelProcessing()
         guard let url = entry.transcriptURL else { return }
         do {

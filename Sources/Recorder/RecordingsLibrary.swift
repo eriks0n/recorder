@@ -34,49 +34,48 @@ enum RecordingsLibrary {
         return PrivateStorage.applicationRoot.appendingPathComponent("Recordings", isDirectory: true)
     }
 
-    /// The `limit` most recent recording folders, newest first.
+    static func roots() -> [URL] {
+        Array(Set([recordingsRoot(), FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first?.appendingPathComponent("Recordings")].compactMap { $0 }))
+    }
     static func recent(limit: Int) -> [RecordingEntry] {
+        Array(entries(roots: roots()).sorted { $0.date > $1.date }.prefix(max(0, limit)))
+    }
+    private struct DocumentIndex: Decodable {
+        var meetingTitle: String?
+        var startedAt: Date?
+    }
+    static func entries(roots: [URL]) -> [RecordingEntry] {
         let fm = FileManager.default
-        let roots = [recordingsRoot(), fm.urls(for: .documentDirectory, in: .userDomainMask).first?.appendingPathComponent("Recordings")].compactMap { $0 }
-        let items = Array(Set(roots)).flatMap { root in
-            (try? fm.contentsOfDirectory(
-                at: root,
-                includingPropertiesForKeys: [.isDirectoryKey, .creationDateKey, .contentModificationDateKey],
-                options: [.skipsHiddenFiles]
-              )) ?? []
+        return Array(Set(roots)).flatMap { root -> [RecordingEntry] in
+            let items = (try? fm.contentsOfDirectory(at: root,
+                includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey, .creationDateKey, .contentModificationDateKey],
+                options: [.skipsHiddenFiles])) ?? []
+            return items.compactMap { folder -> RecordingEntry? in
+                guard let values = try? folder.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey, .creationDateKey, .contentModificationDateKey]),
+                      values.isDirectory == true, values.isSymbolicLink != true else { return nil }
+                let rootJSON = folder.appendingPathComponent("transcript.json")
+                let currentJSON = try? TranscriptRepository.currentJSON(in: folder)
+                let document = currentJSON ?? rootJSON
+                let decoder = JSONDecoder(); decoder.dateDecodingStrategy = .iso8601
+                let index: DocumentIndex? = (try? Data(contentsOf: document)).flatMap { try? decoder.decode(DocumentIndex.self, from: $0) }
+                let metadata = try? PrivateStorage.read(MeetingRecord.self, from: folder.appendingPathComponent("meeting.json"))
+                let currentMarkdown = document.deletingLastPathComponent().appendingPathComponent("transcript.md")
+                let rootMarkdown = folder.appendingPathComponent("transcript.md")
+                let markdown = fm.fileExists(atPath: currentMarkdown.path) ? currentMarkdown : rootMarkdown
+                let audio = folder.appendingPathComponent("audio.m4a")
+                let hasAudio = fm.fileExists(atPath: audio.path)
+                let hasTranscript = fm.fileExists(atPath: markdown.path)
+                let hasDocument = fm.fileExists(atPath: document.path)
+                let hasRaw = ["desktop.caf", "mic.caf"].contains { fm.fileExists(atPath: folder.appendingPathComponent($0).path) }
+                guard hasAudio || hasTranscript || hasDocument || hasRaw else { return nil }
+                let (parsedDate, folderTitle) = parseFolderName(folder.lastPathComponent)
+                let title = index?.meetingTitle ?? metadata?.title ?? (hasTranscript ? MeetingNaming.markdownTitle(markdown) : nil) ?? folderTitle
+                let date = index?.startedAt ?? metadata?.startedAt ?? parsedDate ?? values.creationDate ?? values.contentModificationDate ?? .distantPast
+                return RecordingEntry(folderURL: folder, title: title, date: date,
+                                      audioURL: hasAudio ? audio : nil, transcriptURL: hasTranscript ? markdown : nil,
+                                      documentURL: hasDocument ? document : nil)
+            }
         }
-
-        let entries: [RecordingEntry] = items.compactMap { url in
-            let values = try? url.resourceValues(forKeys: [
-                .isDirectoryKey, .creationDateKey, .contentModificationDateKey,
-            ])
-            guard values?.isDirectory == true, (try? url.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink) != true else { return nil }
-
-            let audio = url.appendingPathComponent("audio.m4a")
-            let transcript = url.appendingPathComponent("transcript.md")
-            let hasAudio = fm.fileExists(atPath: audio.path)
-            let hasTranscript = fm.fileExists(atPath: transcript.path)
-            let document = url.appendingPathComponent("transcript.json")
-            let hasDocument = fm.fileExists(atPath: document.path)
-            let hasRaw = fm.fileExists(atPath: url.appendingPathComponent("desktop.caf").path)
-                || fm.fileExists(atPath: url.appendingPathComponent("mic.caf").path)
-            // Only surface folders that actually look like recordings.
-            guard hasAudio || hasTranscript || hasDocument || hasRaw else { return nil }
-
-            let (parsedDate, title) = parseFolderName(url.lastPathComponent)
-            let fileDate = values?.creationDate ?? values?.contentModificationDate ?? .distantPast
-
-            return RecordingEntry(
-                folderURL: url,
-                title: title,
-                date: parsedDate ?? fileDate,
-                audioURL: hasAudio ? audio : nil,
-                transcriptURL: hasTranscript ? transcript : nil,
-                documentURL: hasDocument ? document : nil
-            )
-        }
-
-        return Array(entries.sorted { $0.date > $1.date }.prefix(limit))
     }
 
     /// Parse "yyyy-M-d-HHmm[-title][-N]" into (date, title). Best-effort.
@@ -88,13 +87,18 @@ enum RecordingsLibrary {
             return (nil, name.isEmpty ? nil : name)
         }
 
+        guard (1970...9999).contains(year), (1...12).contains(month), (1...31).contains(day),
+              (0...23).contains(hhmm / 100), (0...59).contains(hhmm % 100) else { return (nil, name) }
         var components = DateComponents()
         components.year = year
         components.month = month
         components.day = day
         components.hour = hhmm / 100
         components.minute = hhmm % 100
-        let date = Calendar(identifier: .gregorian).date(from: components)
+        let calendar = Calendar(identifier: .gregorian)
+        let date = calendar.date(from: components)
+        guard let date, calendar.component(.day, from: date) == day,
+              calendar.component(.month, from: date) == month else { return (nil, name) }
 
         // Title is everything after the date/time, minus a trailing numeric
         // collision suffix (e.g. "-2") added when two recordings share a minute.

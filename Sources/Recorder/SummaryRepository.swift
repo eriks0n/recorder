@@ -18,8 +18,19 @@ enum SummaryRepository {
         try? PrivateStorage.write(Data(summary.markdown(transcript: transcript).utf8), to: folder.appendingPathComponent("summary.md"))
     }
     static func current(in folder: URL, hash: String) throws -> URL {
-        let pointer = try PrivateStorage.read(Pointer.self, from: folder.appendingPathComponent("current-summary.json"))
+        let pointerURL = folder.appendingPathComponent("current-summary.json")
+        if !FileManager.default.fileExists(atPath: pointerURL.path) {
+            try RecordingRetention.requireContainedRegularFile(folder.appendingPathComponent("summary.json"), in: folder)
+            try RecordingRetention.requireContainedRegularFile(folder.appendingPathComponent("summary.md"), in: folder)
+            let summary = try PrivateStorage.read(MeetingSummary.self, from: folder.appendingPathComponent("summary.json"))
+            guard summary.transcriptHash == hash else { throw LocalError.message("Zusammenfassung ist veraltet; bitte neu erstellen.") }
+            return folder.appendingPathComponent("summary.md")
+        }
+        try RecordingRetention.requireContainedRegularFile(pointerURL, in: folder)
+        let pointer = try PrivateStorage.read(Pointer.self, from: pointerURL)
         guard UUID(uuidString: pointer.generation) != nil, pointer.transcriptHash == hash else { throw LocalError.message("Zusammenfassung ist veraltet; bitte neu erstellen.") }
-        return folder.appendingPathComponent("Summaries/\(pointer.generation)/summary.md")
+        let markdown = folder.appendingPathComponent("Summaries/\(pointer.generation)/summary.md")
+        try RecordingRetention.requireContainedRegularFile(markdown, in: folder)
+        return markdown
     }
 }

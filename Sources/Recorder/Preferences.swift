@@ -20,6 +20,14 @@ enum Preferences {
         static let voiceProfiles       = "voiceProfilesEnabled"
     }
 
+    static var retentionEnabled: Bool {
+        get { defaults.bool(forKey: "recordingRetentionEnabled") }
+        set { defaults.set(newValue, forKey: "recordingRetentionEnabled") }
+    }
+    static var retentionDays: Int {
+        get { max(1, min(3650, defaults.object(forKey: "recordingRetentionDays") == nil ? 30 : defaults.integer(forKey: "recordingRetentionDays"))) }
+        set { defaults.set(max(1, min(3650, newValue)), forKey: "recordingRetentionDays") }
+    }
     static var recordingPath: String {
         get { defaults.string(forKey: "recordingPath") ?? "" }
         set { defaults.set(newValue, forKey: "recordingPath") }

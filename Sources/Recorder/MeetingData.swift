@@ -47,7 +47,9 @@ struct MeetingTranscript: Codable {
     // Embeddings remain in memory until explicit enrollment, never in transcript exports.
     var hash: String {
         let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
-        return SHA256.hash(data: (try? encoder.encode(self)) ?? Data()).map { String(format: "%02x", $0) }.joined()
+        var canonical = self
+        canonical.assignments.sort { $0.id < $1.id }
+        return SHA256.hash(data: (try? encoder.encode(canonical)) ?? Data()).map { String(format: "%02x", $0) }.joined()
     }
     func label(_ speakerID: String) -> String {
         if let a = assignments.first(where: { $0.id == speakerID }), a.status == .confirmed, let name = a.name { return name }

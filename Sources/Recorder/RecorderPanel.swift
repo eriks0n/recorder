@@ -23,6 +23,7 @@ import AppKit
 struct RecorderPanel: View {
     @Environment(RecorderModel.self) private var model
 
+    @State private var renamingRecording: RecordingEntry?
     private let panelWidth: CGFloat = 340
 
     var body: some View {
@@ -31,7 +32,16 @@ struct RecorderPanel: View {
 
             Divider()
 
+            if model.state == .idle {
+                @Bindable var editableModel = model
+                TextField("Meetingname (optional)", text: $editableModel.recordingNameDraft)
+                    .textFieldStyle(.roundedBorder)
+                    .disabled(model.retentionRunning)
+            } else if let title = model.currentSession?.meetingTitle {
+                Text(title).font(.callout).lineLimit(2)
+            }
             controls
+                .disabled(model.retentionRunning)
 
             audioHandlingChip
 
@@ -193,7 +203,7 @@ struct RecorderPanel: View {
                         .buttonStyle(.bordered)
                         .help("Record without attaching to a meeting")
                     }
-                    Text("Tags this recording as “\(current.title)”.")
+                    Text("Tags this recording as “\(MeetingNaming.clean(model.recordingNameDraft) ?? current.title)”.")
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
@@ -621,6 +631,9 @@ struct RecorderPanel: View {
                 }
             }
         }
+        .popover(item: $renamingRecording) { entry in
+            RenameRecordingPopover(entry: entry).environment(model)
+        }
     }
 
     @ViewBuilder
@@ -658,6 +671,8 @@ struct RecorderPanel: View {
 
             // Actions menu.
             Menu {
+                Button("Meeting umbenennen…") { renamingRecording = entry }
+                    .disabled(model.state != .idle || model.transcriptionState == .running || model.summaryRunning || model.retentionRunning)
                 if let transcript = entry.transcriptURL {
                     Button("Transkript und Sprecher bearbeiten") { model.showSavedTranscript(entry) }
                     Button { model.copyTextOfFile(transcript) } label: {

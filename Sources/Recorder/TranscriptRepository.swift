@@ -5,9 +5,12 @@ enum TranscriptRepository {
     static func currentJSON(in folder: URL) throws -> URL? {
         let url = folder.appendingPathComponent("current-result.json")
         guard FileManager.default.fileExists(atPath: url.path) else { return nil }
+        try RecordingRetention.requireContainedRegularFile(url, in: folder)
         let pointer = try PrivateStorage.read(Pointer.self, from: url)
         guard UUID(uuidString: pointer.generation) != nil else { throw LocalError.message("Ungültige Ergebnisreferenz.") }
-        return folder.appendingPathComponent("Results/\(pointer.generation)/transcript.json")
+        let document = folder.appendingPathComponent("Results/\(pointer.generation)/transcript.json")
+        try RecordingRetention.requireContainedRegularFile(document, in: folder)
+        return document
     }
     static func publish(_ document: TranscriptDocument, folder: URL) throws -> URL {
         let generation = UUID().uuidString
