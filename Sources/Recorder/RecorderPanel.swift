@@ -427,6 +427,13 @@ struct RecorderPanel: View {
                     Spacer()
                 }
 
+                ForEach(model.lastDocument?.processingWarnings ?? [], id: \.self) { warning in
+                    Label(warning, systemImage: "info.circle")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
                 HStack(spacing: 8) {
                     Button {
                         model.copyTranscriptText()

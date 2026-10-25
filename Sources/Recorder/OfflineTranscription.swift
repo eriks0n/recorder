@@ -34,6 +34,7 @@ struct OfflineTranscription: Equatable {
     var lines: [TranscriptLine]
     var clusters: [String: ClusterEvidence]
     var speakerNames: [String: String]
+    var warnings: [String] = []
 
     /// Every line's text with no timestamps or speaker labels, for checks that care only
     /// about how much speech came back.

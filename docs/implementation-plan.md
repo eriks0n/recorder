@@ -20,7 +20,7 @@ Der Nutzer hat die Tests mit echten Aufnahmen auf später verschoben und ausdrü
 - P4: Abbruch/erneute Verarbeitung, vollständige Ergebnisgenerationen mit atomarem Zeiger, private Dateirechte, lokaler Standardordner und Synchronisationshinweis, blockweises Audiomischen. Pausen behalten die gemeinsame Zeitachse durch Stille. Hardware-/Langlaufabnahme offen.
 - P5: lokaler MLX-Adapter, Tokenbudget/Abschnitte/Konsolidierung, maximal zwei Reparaturversuche, Schema-/Beleg-/Frist-/Zuständigenprüfung, vier Exportabschnitte und separate Fehleranzeige implementiert. **MLX-Build und Inferenz sind hier noch nicht verifiziert**: Metal-Compiler fehlt. Der CLT-Build meldet diese Voraussetzung klar und behält das Transkript. Keine Cloud-Alternative.
 
-Prüfstand: 45 ausführbare Kernprüfungen bestanden (ohne echte Meetings, mit synthetischen Testtönen); Release-App gebaut, Ressourcen gebündelt und Ad-hoc-Signatur geprüft. Der geerbte XCTest-Lauf scheitert in dieser CLT-Umgebung am fehlenden XCTest-Modul und ist ausdrücklich nicht als bestanden gewertet.
+Prüfstand: 56 ausführbare Kernprüfungen bestanden (ohne echte Meetings, mit synthetischen Testtönen); Release-App gebaut, Ressourcen gebündelt und Ad-hoc-Signatur geprüft. Der geerbte XCTest-Lauf scheitert in dieser CLT-Umgebung am fehlenden XCTest-Modul und ist ausdrücklich nicht als bestanden gewertet.
 
 V1 ist damit als Implementierung fortgeschritten, aber noch nicht vollständig abgenommen. Insbesondere werden die ursprünglichen Qualitätsziele nicht als erreicht behauptet. Die aktuelle Bedienung und offenen Prüfschritte stehen im README.
 
@@ -257,3 +257,9 @@ Geprüft am 25. Oktober 2026; Versionen beim Start erneut verifizieren.
 8. MLX Swift LM: https://github.com/ml-explore/mlx-swift-lm
 
 Architektur, Aufwand und Qualitätsziele sind Projektvorschläge, keine Zusagen der genannten Anbieter.
+
+## Fehlerkorrektur: reine Mikrofonaufnahme (25. Oktober 2026)
+
+Ein Nutzertest ohne Kalendertermin und ohne Lautsprecherausgabe zeigte einen Transkriptionsabbruch. Ursache war das fehlende optionale SpeakerKit-Modell, nicht der stille Desktopkanal. Die bisherige Integration ließ Fehler der Sprechertrennung die gesamte ASR-Verarbeitung abbrechen.
+
+Korrigiert: Spracherkennung zuerst; stille/leere Kanäle überspringen; fehlendes oder fehlerhaftes SpeakerKit ergibt anonyme Sprecher und einen gespeicherten Hinweis. Fehlende Referenz-Embeddings verhindern nur das Enrollment. Abbruch bleibt ein echter Abbruch. Keine automatische Modellinstallation, keine Cloud-Nutzung. Neue Regressionstests prüfen diese Fälle; insgesamt 56 Kernprüfungen und Release-Build erfolgreich. Die laufende Benutzer-App wurde nicht beendet; der neue Build wird nach einem App-Neustart aktiv. Ein erneuter Durchlauf der konkreten Benutzeraufnahme ist noch nicht bestätigt.

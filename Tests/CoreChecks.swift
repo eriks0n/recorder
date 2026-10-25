@@ -18,6 +18,26 @@ struct CoreChecks {
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent("recorder-core-\(UUID().uuidString)")
         try PrivateStorage.directory(folder)
         defer { try? FileManager.default.removeItem(at: folder) }
+        try check(!AudioSignal.hasSignal([]), "Empty channel is skipped")
+        try check(!AudioSignal.hasSignal([Float](repeating: 0, count: 16000)), "Silent desktop is skipped")
+        try check(AudioSignal.hasSignal([Float](repeating: 0.1, count: 16000)), "Microphone-only audio is processed")
+        try check(!AudioSignal.hasSignal([.nan]), "Invalid channel samples do not trigger analysis")
+        let missing = try await OptionalSpeakerAnalysis.run { throw SpeakerAnalysisIssue.missingModel }
+        try check(missing.warning?.contains("Modell") == true, "Missing diarization model becomes an explanatory warning")
+        try check(missing.spans.isEmpty && missing.centroids.isEmpty, "Failure cannot produce speaker identities or enrollment evidence")
+        let (anonymousWords, anonymousTurns) = TranscriptAssembler.assemble(words: [
+            .init(text: "Nur Mikrofon", start: 0, end: 1, channel: .microphone, speakerID: "unknown")
+        ], intervals: [])
+        try check(anonymousWords.first?.text == "Nur Mikrofon", "Recognized speech survives missing diarization")
+        try check(anonymousTurns.first?.speakerID == "Unbekannt-microphone", "Missing diarization never identifies the microphone as a person")
+        let broken = try await OptionalSpeakerAnalysis.run { throw LocalError.message("SDK failed") }
+        try check(broken.warning != nil && broken.centroids.isEmpty, "Runtime diarization failures are nonfatal and never enroll")
+        let good = try await OptionalSpeakerAnalysis.run { ([DiarizedSpan(start: 0, end: 1, clusterID: 1)], [1: [1, 0]]) }
+        try check(good.warning == nil && good.spans.count == 1 && good.centroids.count == 1, "Successful diarization remains available")
+        do {
+            _ = try await OptionalSpeakerAnalysis.run { throw CancellationError() }
+            try check(false, "Speaker-analysis cancellation must propagate")
+        } catch is CancellationError { count += 1 }
         let word = TranscriptWord(text: "Hallo", start: 2, end: 3, channel: .microphone, speakerID: "unknown")
         let (words, turns) = TranscriptAssembler.assemble(words: [word], intervals: [
             .init(id: "M1", start: 1, end: 4, channel: .microphone),

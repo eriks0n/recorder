@@ -9,7 +9,7 @@ mkdir -p .build/core-module-cache
 swiftc -swift-version 5 -parse-as-library -sdk "$SDK" -module-cache-path .build/core-module-cache \
   Sources/Recorder/MeetingData.swift Sources/Recorder/PrivateStorage.swift \
   Sources/Recorder/MeetingSummaryService.swift Sources/Recorder/SpeakerNaming.swift \
-  Sources/Recorder/OfflineTranscription.swift Sources/Recorder/SpeakerProfile.swift Sources/Recorder/SpeakerProfileStore.swift \
+  Sources/Recorder/OptionalSpeakerAnalysis.swift Sources/Recorder/OfflineTranscription.swift Sources/Recorder/SpeakerProfile.swift Sources/Recorder/SpeakerProfileStore.swift \
   Sources/Recorder/TranscriptDocument.swift Sources/Recorder/TranscriptLine.swift \
   Sources/Recorder/TranscriptRepository.swift Sources/Recorder/SummaryRepository.swift Sources/Recorder/StereoMixer.swift \
   Sources/Recorder/Shared.swift Sources/Recorder/RecordingsLibrary.swift Sources/Recorder/Preferences.swift \

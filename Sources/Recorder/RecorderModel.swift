@@ -732,6 +732,7 @@ final class RecorderModel {
                     speakerCentroidsID: centroidsID
                 )
                 document.schemaVersion = 1; document.meetingRecord = record; document.proposedNames = proposals
+                document.processingWarnings = offline.warnings
                 self.writeTranscript(document: document, pending: pending, keepStatus: false)
                 self.live.releaseModels()
                 if self.autoSummary { await self.generateSummary(operation: operation) }
@@ -796,7 +797,9 @@ final class RecorderModel {
         lastDocument = (try? TranscriptDocument.load(from: markdownURL.deletingLastPathComponent().appendingPathComponent("transcript.json"))) ?? document
         transcriptionState = .done(markdownURL)
         if !keepStatus {
-            statusMessage = "Transcript saved (transcript.md)"
+            statusMessage = document.processingWarnings?.isEmpty == false
+                ? "Transkript gespeichert · mit Hinweis zur Sprechertrennung"
+                : "Transcript saved (transcript.md)"
         }
         refreshRecordings()
     }

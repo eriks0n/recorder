@@ -32,6 +32,7 @@ struct TranscriptDocument: Codable, Equatable {
     var schemaVersion: Int?
     var meetingRecord: MeetingRecord?
     var proposedNames: [String: String]?
+    var processingWarnings: [String]?
 
     /// Speaker ids in order of first speech.
     var speakerIDs: [String] {
@@ -79,6 +80,7 @@ struct TranscriptDocument: Codable, Equatable {
         out.append("- **Model:** WhisperKit `\(model)` (on-device)")
         out.append("- **Source:** \(isPolished ? "high-quality pass over the recorded audio" : "live transcription")")
         out.append("")
+        for warning in processingWarnings ?? [] { out.append("> Hinweis: " + warning); out.append("") }
         out.append("---")
         out.append("")
 
