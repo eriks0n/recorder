@@ -187,7 +187,8 @@ final class RecorderModel {
     var taskInboxStatus: String?
     var todoistProjects: [TodoistChoice] = []
     var todoistSections: [TodoistChoice] = []
-    var todoistCollaborators: [TodoistChoice] = []
+    var todoistLabels: [TodoistChoice] = []
+    var todoistIdentity: TodoistIdentity?
     var todoistStatus: String?
     var todoistBusy = false
     let processingQueue: ProcessingQueue

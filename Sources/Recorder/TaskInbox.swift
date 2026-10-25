@@ -44,8 +44,10 @@ struct TaskDraft: Codable, Identifiable, Equatable {
     var exportError: String?
     var attemptID: UUID?
     var frozenPayload: Data?
+    var sendAccountID: String?
+    var revision: UUID?
     var locked: Bool { exportChannel != nil || attemptID != nil }
-    var exportable: Bool { (duplicateWarning == nil || duplicateApproved == true) && reviewed && !stale && !dismissed && kind != "cancelled" && responsibility != .unresolved && !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && exportChannel == nil }
+    var exportable: Bool { (duplicateWarning == nil || duplicateApproved == true) && reviewed && !stale && !dismissed && kind != "cancelled" && responsibility == .mine && (scheduled.isEmpty || MeetingDateResolver.validISO(scheduled)) && (deadline.isEmpty || MeetingDateResolver.validISO(deadline)) && (1...4).contains(priority) && (sectionID.isEmpty || !projectID.isEmpty) && !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && exportChannel == nil }
     var exportTitle: String { responsibility == .waiting ? "Warten auf \(ownerName ?? "Rückmeldung"): \(title)" : title }
     var exportDescription: String {
         var lines = ["Meeting: \(meetingTitle)", "Bereich: \(scope)", "Aufnahme: \(ISO8601DateFormatter().string(from: meetingDate))"]
@@ -92,6 +94,48 @@ enum MeetingDateResolver {
 struct TaskProjectMapping: Codable, Equatable {
     var projectID: String; var projectName: String; var sectionID: String; var sectionName: String
 }
+struct MeetingTaskSettings: Codable, Equatable {
+    var projectID = ""
+    var projectName = ""
+    var labels = ""
+    var ownSpeakerIDs: [String]? // nil leaves individual assignments unchanged; [] explicitly means none.
+}
+enum TodoistLabels {
+    private static func decode(_ text: String) throws -> [String] {
+        let chars = Array(text)
+        var fields: [String] = [], value = "", quoted = false, i = 0
+        while i < chars.count {
+            if chars[i] == "\"" {
+                if quoted && i + 1 < chars.count && chars[i + 1] == "\"" { value.append("\""); i += 1 }
+                else { quoted.toggle() }
+            } else if chars[i] == "," && !quoted { fields.append(value); value = "" }
+            else { value.append(chars[i]) }
+            i += 1
+        }
+        guard !quoted else { throw LocalError.message("Ein Tag enthält ein nicht geschlossenes Anführungszeichen.") }
+        fields.append(value)
+        var seen: Set<String> = []
+        return fields.compactMap { part in
+            var value = part.trimmingCharacters(in: .whitespacesAndNewlines)
+            if value.hasPrefix("@") { value.removeFirst() }
+            value = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            return !value.isEmpty && seen.insert(value.lowercased()).inserted ? value : nil
+        }
+    }
+    static func parse(_ text: String) -> [String] { (try? decode(text)) ?? [] }
+    static func format(_ labels: [String]) -> String {
+        labels.map { label in
+            label.contains(",") || label.contains("\"") ? "\"" + label.replacingOccurrences(of: "\"", with: "\"\"") + "\"" : label
+        }.joined(separator: ", ")
+    }
+    static func validate(_ text: String) throws {
+        let labels = try decode(text)
+        guard !text.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains), labels.allSatisfy({ $0.count <= 128 }) else {
+            throw LocalError.message("Tags dürfen höchstens 128 Zeichen lang sein und keine Steuerzeichen enthalten.")
+        }
+    }
+}
+
 struct TaskCSVBatch: Codable, Identifiable {
     var id = UUID()
     var taskIDs: [UUID]
@@ -104,8 +148,9 @@ struct TaskInboxData: Codable {
     var myName = ""
     var mappings: [String: TaskProjectMapping] = [:]
     var csvBatches: [TaskCSVBatch] = []
+    var meetingSettings: [String: MeetingTaskSettings] = [:]
     init() {}
-    enum CodingKeys: String, CodingKey { case schemaVersion, drafts, myName, mappings, csvBatches }
+    enum CodingKeys: String, CodingKey { case schemaVersion, drafts, myName, mappings, csvBatches, meetingSettings }
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         schemaVersion = try c.decode(Int.self, forKey: .schemaVersion)
@@ -113,6 +158,7 @@ struct TaskInboxData: Codable {
         myName = try c.decodeIfPresent(String.self, forKey: .myName) ?? ""
         mappings = try c.decodeIfPresent([String: TaskProjectMapping].self, forKey: .mappings) ?? [:]
         csvBatches = try c.decodeIfPresent([TaskCSVBatch].self, forKey: .csvBatches) ?? []
+        meetingSettings = try c.decodeIfPresent([String: MeetingTaskSettings].self, forKey: .meetingSettings) ?? [:]
     }
 }
 @MainActor @Observable final class TaskInbox {
@@ -140,9 +186,13 @@ struct TaskInboxData: Codable {
             guard !data.drafts[i].locked else { throw LocalError.message("Exportierte oder bereits gesendete Aufgaben sind gesperrt.") }
             guard data.drafts[i].sourceHash == draft.sourceHash, data.drafts[i].sourceKey == draft.sourceKey,
                   data.drafts[i].kind == draft.kind, data.drafts[i].evidence == draft.evidence else { throw LocalError.message("Die Quelle wurde inzwischen geändert. Bitte den Entwurf neu öffnen.") }
+            guard data.drafts[i].revision == draft.revision else { throw LocalError.message("Die Aufgabe wurde inzwischen geändert. Bitte Entwurf neu öffnen.") }
+            guard data.drafts[i].ownerID == draft.ownerID, data.drafts[i].ownerName == draft.ownerName else { throw LocalError.message("Die Sprecherzuordnung wurde geändert. Bitte Entwurf neu öffnen.") }
             var draft = draft
+            try TodoistLabels.validate(draft.labels)
+            draft.labels = TodoistLabels.format(TodoistLabels.parse(draft.labels))
             draft.stale = data.drafts[i].stale
-            if data.drafts[i] != draft { draft.reviewed = false; draft.selected = false }
+            if data.drafts[i] != draft { draft.reviewed = false; draft.selected = false; draft.revision = UUID() }
             data.drafts[i] = draft
         }
     }
@@ -153,8 +203,31 @@ struct TaskInboxData: Codable {
             guard !d.locked, !d.stale, d.kind != "cancelled", (d.duplicateWarning == nil || d.duplicateApproved == true), d.responsibility != .unresolved, !d.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
                   d.deadline.isEmpty || MeetingDateResolver.validISO(d.deadline), d.scheduled.isEmpty || MeetingDateResolver.validISO(d.scheduled), (1...4).contains(d.priority),
                   d.sectionID.isEmpty || !d.projectID.isEmpty else { throw LocalError.message("Bitte Zuständigkeit, Titel, Projekt und Datumsfelder prüfen.") }
-            data.drafts[i].reviewed = true; data.drafts[i].selected = true
+            try TodoistLabels.validate(d.labels)
+            data.drafts[i].reviewed = true; data.drafts[i].selected = d.responsibility == .mine
         }
+    }
+    func configureMeeting(_ id: UUID, settings: MeetingTaskSettings) throws {
+        try TodoistLabels.validate(settings.labels)
+        var settings = settings; settings.labels = TodoistLabels.format(TodoistLabels.parse(settings.labels))
+        try edit { data in
+            data.meetingSettings[id.uuidString] = settings
+            for i in data.drafts.indices where data.drafts[i].meetingID == id && !data.drafts[i].locked {
+                let old = data.drafts[i]
+                if data.drafts[i].projectID != settings.projectID {
+                    data.drafts[i].sectionID = ""; data.drafts[i].sectionName = ""
+                    data.drafts[i].assigneeID = ""; data.drafts[i].assigneeName = ""
+                }
+                data.drafts[i].projectID = settings.projectID; data.drafts[i].projectName = settings.projectName; data.drafts[i].labels = settings.labels
+                if let own = settings.ownSpeakerIDs {
+                    data.drafts[i].responsibility = data.drafts[i].ownerID.map { own.contains($0) ? .mine : .waiting } ?? .unresolved
+                }
+                if old != data.drafts[i] { data.drafts[i].reviewed = false; data.drafts[i].selected = false; data.drafts[i].revision = UUID() }
+            }
+        }
+    }
+    func selectedForMeeting(_ id: UUID) -> [TaskDraft] {
+        data.drafts.filter { $0.meetingID == id && $0.responsibility == .mine && $0.selected && $0.exportable && $0.attemptID == nil }
     }
     func invalidate(meetingID: UUID) throws {
         try edit { data in
@@ -178,7 +251,11 @@ struct TaskInboxData: Codable {
                 let matching = data.drafts.indices.filter { data.drafts[$0].meetingID == meeting.id && data.drafts[$0].evidence.map(\.turnID).sorted().joined(separator: ",") == turns }
                 let uniqueSource = actions.filter { $0.evidence.map(\.turnID).sorted().joined(separator: ",") == turns }.count == 1
                 let index = data.drafts.firstIndex { $0.sourceKey == key } ?? (matching.count == 1 && uniqueSource ? matching.first : nil)
-                let ownerID = action.owner.flatMap { owner in transcript.assignments.first { $0.id == owner || $0.name == owner }?.id }
+                let ownerID = action.owner.flatMap { owner -> String? in
+                    if transcript.turns.contains(where: { $0.speakerID == owner }) { return owner }
+                    let names = transcript.assignments.filter { $0.status == .confirmed && $0.name == owner }
+                    return names.count == 1 ? names.first?.id : nil
+                }
                 let ownerName = ownerID.map { transcript.label($0) } ?? action.owner
                 let suggestion = MeetingDateResolver.suggest(action.deadline, meeting: meeting.startedAt)
                 let times = action.evidence.map { ref in MeetingTranscript.timestamp(transcript.turns.first { $0.id == ref.turnID }?.start ?? 0) }
@@ -186,11 +263,15 @@ struct TaskInboxData: Codable {
                     seen.insert(data.drafts[i].id)
                     guard !data.drafts[i].locked else { continue }
                     let changed = data.drafts[i].sourceHash != transcript.hash || data.drafts[i].sourceTask != action.task || data.drafts[i].sourceOwner != action.owner || data.drafts[i].sourceDeadline != action.deadline || data.drafts[i].kind != action.kind || data.drafts[i].evidence != action.evidence
+                    if data.drafts[i].ownerID != ownerID || data.drafts[i].ownerName != ownerName {
+                        let own = data.meetingSettings[meeting.id.uuidString]?.ownSpeakerIDs
+                        data.drafts[i].responsibility = own.flatMap { ids in ownerID.map { ids.contains($0) ? .mine : .waiting } } ?? .unresolved
+                    }
                     data.drafts[i].sourceHash = transcript.hash; data.drafts[i].sourceKey = key; data.drafts[i].stale = false
                     data.drafts[i].sourceTask = action.task; data.drafts[i].sourceOwner = action.owner; data.drafts[i].sourceDeadline = action.deadline
                     data.drafts[i].ownerID = ownerID; data.drafts[i].ownerName = ownerName; data.drafts[i].evidence = action.evidence; data.drafts[i].evidenceTimes = times
                     data.drafts[i].meetingTitle = meeting.title ?? "Aufnahme"; data.drafts[i].kind = action.kind
-                    if changed { data.drafts[i].reviewed = false; data.drafts[i].selected = false }
+                    if changed { data.drafts[i].reviewed = false; data.drafts[i].selected = false; data.drafts[i].revision = UUID() }
                 } else {
                     var d = TaskDraft(meetingID: meeting.id, meetingTitle: meeting.title ?? "Aufnahme", scope: meeting.scope, meetingDate: meeting.startedAt,
                         sourceHash: transcript.hash, sourceKey: key, sourceTask: action.task, sourceOwner: action.owner, ownerID: ownerID, ownerName: ownerName,
@@ -199,8 +280,11 @@ struct TaskInboxData: Codable {
                         d.duplicateWarning = "Es gibt bereits Aufgaben aus derselben Textstelle. Bitte vor dem Export prüfen, ob dies eine weitere Aufgabe oder ein Duplikat ist."
                     }
                     d.deadline = suggestion ?? ""; d.dateHint = action.deadline == nil ? nil : suggestion == nil ? "Frist unklar – bitte prüfen" : "Datum aus dem Meetingdatum abgeleitet – bitte bestätigen"
-                    if !data.myName.isEmpty, ownerName?.caseInsensitiveCompare(data.myName) == .orderedSame { d.responsibility = .mine }
                     if let mapping = data.mappings[meeting.scope] { d.projectID = mapping.projectID; d.projectName = mapping.projectName; d.sectionID = mapping.sectionID; d.sectionName = mapping.sectionName }
+                    if let settings = data.meetingSettings[meeting.id.uuidString] {
+                        d.projectID = settings.projectID; d.projectName = settings.projectName; d.sectionID = ""; d.sectionName = ""; d.labels = settings.labels
+                        if let ids = settings.ownSpeakerIDs { d.responsibility = ownerID.map { ids.contains($0) ? .mine : .waiting } ?? .unresolved }
+                    }
                     data.drafts.append(d); seen.insert(d.id)
                 }
             }

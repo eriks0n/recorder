@@ -62,8 +62,8 @@ import XCTest
         XCTAssertThrowsError(try inbox.review(id))
         var d = inbox.data.drafts[0]; d.responsibility = .waiting; d.deadline = "2026-02-31"
         try inbox.save(d); XCTAssertThrowsError(try inbox.review(id))
-        d.deadline = ""; try inbox.save(d); try inbox.review(id)
-        XCTAssertTrue(inbox.data.drafts[0].exportable)
+        d = inbox.data.drafts[0]; d.deadline = ""; try inbox.save(d); try inbox.review(id)
+        XCTAssertFalse(inbox.data.drafts[0].exportable)
     }
     func testDatesUseMeetingTimezoneRatherThanExportDay() {
         let meeting = ISO8601DateFormatter().date(from: "2026-10-25T23:30:00Z")!
@@ -94,7 +94,7 @@ import XCTest
         XCTAssertEqual(additional.count, 2); XCTAssertTrue(additional.allSatisfy { $0.duplicateWarning != nil })
         var new = additional[0]; new.responsibility = .mine; try inbox.save(new)
         XCTAssertThrowsError(try inbox.review(new.id))
-        new.duplicateApproved = true; try inbox.save(new); try inbox.review(new.id)
+        new = inbox.data.drafts.first { $0.id == new.id }!; new.duplicateApproved = true; try inbox.save(new); try inbox.review(new.id)
         XCTAssertTrue(inbox.data.drafts.first { $0.id == new.id }!.exportable)
     }
     func testInboxBeforeCSVFeatureDecodesWithEmptyBatches() throws {

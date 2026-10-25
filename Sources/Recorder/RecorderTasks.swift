@@ -6,13 +6,26 @@ extension RecorderModel {
     var selectedTasks: [TaskDraft] { taskInbox.data.drafts.filter { $0.selected && $0.exportable && $0.attemptID == nil } }
     func connectTodoist(token: String) {
         guard !todoistBusy else { return }
-        do { try TodoistCredential.save(token); todoistStatus = "Zugang im Schlüsselbund gespeichert. Projekte können jetzt geladen werden." }
-        catch { todoistStatus = error.localizedDescription }
+        let token = token.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !token.isEmpty, !token.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains) else {
+            todoistStatus = "Bitte einen gültigen Todoist-API-Key eintragen."; return
+        }
+        todoistBusy = true; todoistStatus = "Verbindung wird geprüft…"
+        Task {
+            defer { todoistBusy = false }
+            do {
+                let identity = try await TodoistClient().identity(token: token)
+                try TodoistCredential.save(token)
+                todoistIdentity = identity
+                todoistProjects = []; todoistSections = []; todoistLabels = []
+                todoistStatus = "Verbunden als " + (identity.full_name ?? identity.id) + " · API-Key im Schlüsselbund gespeichert."
+            } catch { todoistStatus = "Verbindung nicht gespeichert: " + error.localizedDescription }
+        }
     }
     func disconnectTodoist() {
         guard !todoistBusy else { return }
         do {
-            try TodoistCredential.remove(); todoistProjects = []; todoistSections = []; todoistCollaborators = []
+            try TodoistCredential.remove(); todoistProjects = []; todoistSections = []; todoistLabels = []; todoistIdentity = nil
             todoistStatus = "Todoist-Zugang aus dem Schlüsselbund entfernt."
         } catch { todoistStatus = error.localizedDescription }
     }
@@ -24,31 +37,21 @@ extension RecorderModel {
             do {
                 guard let token = try TodoistCredential.load() else { throw LocalError.message("Bitte zuerst den Todoist-API-Token speichern.") }
                 let client = TodoistClient()
-                todoistProjects = try await client.choices("projects", token: token)
-                todoistSections = try await client.choices("sections", token: token)
-                todoistStatus = "Projekte und Abschnitte geladen."
+                let identity = try await client.identity(token: token)
+                let projects = try await client.choices("projects", token: token)
+                let sections = try await client.choices("sections", token: token)
+                let labels = try await client.choices("labels", token: token)
+                todoistIdentity = identity; todoistProjects = projects; todoistSections = sections; todoistLabels = labels
+                todoistStatus = "Verbunden als " + (identity.full_name ?? identity.id) + " · Projekte und Tags geladen."
             } catch { todoistStatus = error.localizedDescription }
         }
     }
-    func loadTodoistCollaborators(project: String) {
-        guard !todoistBusy, !project.isEmpty, project.allSatisfy({ $0.isLetter || $0.isNumber }) else { return }
-        todoistBusy = true; todoistCollaborators = []
-        Task {
-            defer { todoistBusy = false }
-            do {
-                guard let token = try TodoistCredential.load() else { throw LocalError.message("Bitte Todoist verbinden.") }
-                todoistCollaborators = try await TodoistClient().choices("projects/\(project)/collaborators", token: token)
-                todoistStatus = "Projektmitglieder geladen. Bitte ausdrücklich zuordnen."
-            } catch { todoistStatus = error.localizedDescription }
+    func taskMeetingSpeakers(_ id: UUID) -> [(id: String, name: String)] {
+        var seen: Set<String> = []
+        return taskInbox.data.drafts.filter { $0.meetingID == id }.compactMap { draft in
+            guard let id = draft.ownerID, seen.insert(id).inserted else { return nil }
+            return (id, draft.ownerName ?? id)
         }
-    }
-    func rememberTaskProject(_ draft: TaskDraft) {
-        do {
-            try taskInbox.edit { data in
-                data.mappings[draft.scope] = TaskProjectMapping(projectID: draft.projectID, projectName: draft.projectName, sectionID: draft.sectionID, sectionName: draft.sectionName)
-            }
-            taskInboxStatus = "Zielprojekt für neue Aufgaben im Bereich \(draft.scope) gespeichert."
-        } catch { taskInboxStatus = error.localizedDescription }
     }
     private func validateTaskSources(_ drafts: [TaskDraft]) throws {
         let entries = RecordingsLibrary.entries(roots: RecordingsLibrary.roots())
@@ -64,10 +67,10 @@ extension RecorderModel {
             }
         }
     }
-    func exportTasksCSV(batchID: UUID? = nil) {
+    func exportTasksCSV(batchID: UUID? = nil, meetingID: UUID? = nil) {
         do {
             let existing = batchID.flatMap { id in taskInbox.data.csvBatches.first { $0.id == id } }
-            let tasks = selectedTasks
+            let tasks = meetingID.map { taskInbox.selectedForMeeting($0) } ?? selectedTasks
             if existing == nil { try validateTaskSources(tasks) }
             let content = try existing?.content ?? TodoistCSV.render(tasks)
             let panel = NSSavePanel(); panel.allowedContentTypes = [.commaSeparatedText]; panel.nameFieldStringValue = "Recorder-Aufgaben.csv"
@@ -95,31 +98,20 @@ extension RecorderModel {
             taskInboxStatus = "CSV gespeichert. In Todoist im passenden Projekt einmalig importieren. Aufgaben sind für weiteren Versand gesperrt."
         } catch { taskInboxStatus = "CSV: " + error.localizedDescription + " Ein vorbereiteter Export kann erneut gespeichert werden." }
     }
-    func sendTasksToTodoist(retryID: UUID? = nil) {
+    func sendTasksToTodoist(meetingID: UUID? = nil, taskIDs: [UUID]? = nil, expectedDrafts: [TaskDraft]? = nil, retryID: UUID? = nil) {
         guard !todoistBusy else { return }
-        let ids = retryID.map { [$0] } ?? selectedTasks.map(\.id)
+        let candidates = meetingID.map { taskInbox.selectedForMeeting($0) } ?? []
+        let ids = retryID.map { [$0] } ?? (taskIDs ?? candidates.map(\.id)).filter { id in candidates.contains { $0.id == id } }
         guard !ids.isEmpty else { return }
         todoistBusy = true
         Task {
             defer { todoistBusy = false }
             do {
                 guard let token = try TodoistCredential.load() else { throw LocalError.message("Bitte zuerst Todoist in den Einstellungen verbinden.") }
-                let client = TodoistClient()
-                var count = 0
-                for id in ids {
-                    if retryID == nil, let draft = taskInbox.data.drafts.first(where: { $0.id == id }) { try validateTaskSources([draft]) }
-                    let payload = try taskInbox.prepareSend(id)
-                    do {
-                        let remote = try await client.create(frozenPayload: payload, token: token)
-                        try taskInbox.recordSend(id, remoteID: remote); count += 1
-                    } catch {
-                        if error is TodoistRejected { try taskInbox.rejectSend(id, error: error.localizedDescription) }
-                        else { try taskInbox.recordSend(id, remoteID: nil, error: error.localizedDescription) }
-                        throw error
-                    }
-                }
+                let count = try await TodoistDelivery(inbox: taskInbox).send(ids: ids, meetingID: meetingID, expectedDrafts: expectedDrafts,
+                    retryID: retryID, token: token, validateSource: { [self] drafts in try validateTaskSources(drafts) })
                 taskInboxStatus = "\(count) Aufgaben an Todoist übertragen."
-            } catch { taskInboxStatus = "Todoist: " + error.localizedDescription }
+            } catch { taskInboxStatus = "Todoist: " + error.localizedDescription + " Bereits bestätigte Aufgaben bleiben als übertragen markiert; weitere ausgewählte Aufgaben bleiben offen." }
         }
     }
 }

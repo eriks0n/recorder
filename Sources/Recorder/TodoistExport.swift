@@ -32,6 +32,11 @@ struct TodoistChoice: Codable, Identifiable, Equatable {
     var id: String
     var name: String
     var project_id: String?
+    var is_shared: Bool? = nil
+}
+struct TodoistIdentity: Codable, Equatable {
+    var id: String
+    var full_name: String?
 }
 struct TodoistSyncArguments: Codable, Equatable {
     struct Day: Codable, Equatable { var date: String }
@@ -48,7 +53,7 @@ struct TodoistSyncArguments: Codable, Equatable {
         content = draft.exportTitle; description = draft.exportDescription
         project_id = draft.projectID.isEmpty ? nil : draft.projectID
         section_id = draft.sectionID.isEmpty ? nil : draft.sectionID
-        labels = draft.labels.split(separator: ",").map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
+        labels = TodoistLabels.parse(draft.labels)
         priority = 5 - draft.priority // Sync API convention: 4 urgent, 1 normal.
         due = draft.scheduled.isEmpty ? nil : Day(date: draft.scheduled)
         deadline = draft.deadline.isEmpty ? nil : Day(date: draft.deadline)
@@ -102,8 +107,13 @@ struct TodoistClient {
         }
         return data
     }
+    func identity(token: String) async throws -> TodoistIdentity {
+        let user = try JSONDecoder().decode(TodoistIdentity.self, from: await send(path: "user", token: token))
+        guard !user.id.isEmpty else { throw LocalError.message("Todoist-Konto konnte nicht erkannt werden.") }
+        return user
+    }
     func choices(_ path: String, token: String, project: String? = nil) async throws -> [TodoistChoice] {
-        guard ["projects", "sections"].contains(path) || (path.hasPrefix("projects/") && path.hasSuffix("/collaborators") && path.split(separator: "/").count == 3) else { throw LocalError.message("Ungültige Todoist-Auswahl.") }
+        guard ["projects", "sections", "labels"].contains(path) || (path.hasPrefix("projects/") && path.hasSuffix("/collaborators") && path.split(separator: "/").count == 3) else { throw LocalError.message("Ungültige Todoist-Auswahl.") }
         struct Page: Decodable { var results: [TodoistChoice]; var next_cursor: String? }
         var all: [TodoistChoice] = [], cursor: String?, cursors: Set<String> = []
         repeat {
@@ -143,6 +153,7 @@ enum TodoistCSV {
         guard !drafts.isEmpty, drafts.allSatisfy({ $0.exportable && $0.attemptID == nil }), Set(drafts.map(\.projectID)).count == 1 else {
             throw LocalError.message("Für CSV bitte geprüfte Aufgaben aus genau einem Zielprojekt auswählen.")
         }
+        for draft in drafts { try TodoistLabels.validate(draft.labels) }
         let header = ["TYPE", "CONTENT", "DESCRIPTION", "PRIORITY", "INDENT", "RESPONSIBLE", "DATE", "DATE_LANG", "TIMEZONE", "DEADLINE", "DEADLINE_LANG"]
         var rows: [[String]] = [header]
         let sorted = drafts.sorted { ($0.sectionName, $0.meetingDate, $0.title) < ($1.sectionName, $1.meetingDate, $1.title) }
@@ -151,23 +162,33 @@ enum TodoistCSV {
             if !d.sectionName.isEmpty, d.sectionName != lastSection {
                 rows.append(["section", d.sectionName] + Array(repeating: "", count: header.count - 2)); lastSection = d.sectionName
             }
-            let labels = d.labels.split(separator: ",").map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }.map { "@" + $0 }.joined(separator: " ")
+            let labels = TodoistLabels.parse(d.labels).map { "@" + $0 }.joined(separator: " ")
             let content = d.exportTitle + (labels.isEmpty ? "" : " " + labels)
-            let assignee = d.assigneeID.isEmpty ? "" : "\(d.assigneeName) (\(d.assigneeID))"
+            let assignee = "" // CSV import belongs to the importing user; never carry legacy third-party assignments.
             rows.append(["task", content, d.exportDescription, String(d.priority), "1", assignee, d.scheduled, "de", TimeZone.current.identifier, d.deadline, "de"])
         }
         return rows.map { $0.map(cell).joined(separator: ",") }.joined(separator: "\r\n") + "\r\n"
     }
 }
 extension TaskInbox {
-    func prepareSend(_ id: UUID) throws -> Data {
+    func prepareSend(_ id: UUID, accountID: String, sharedProject: Bool = false) throws -> Data {
         var payload: Data!
         try edit { data in
             guard let i = data.drafts.firstIndex(where: { $0.id == id }), data.drafts[i].exportChannel == nil else { throw LocalError.message("Aufgabe wurde bereits exportiert.") }
-            if let frozen = data.drafts[i].frozenPayload { payload = frozen; return }
-            guard data.drafts[i].exportable else { throw LocalError.message("Bitte die Aufgabe zuerst prüfen und bestätigen.") }
+            guard data.drafts[i].responsibility == .mine else { throw LocalError.message("Nur deine eigenen Aufgaben dürfen an Todoist übertragen werden.") }
+            if let frozen = data.drafts[i].frozenPayload {
+                guard data.drafts[i].sendAccountID == accountID else { throw LocalError.message("Dieser offene Versandauftrag gehört zu einem anderen oder noch nicht zugeordneten Todoist-Konto. Bitte mit dem ursprünglichen Konto prüfen.") }
+                let command = try JSONDecoder().decode(TodoistSyncCommand.self, from: frozen)
+                guard command.args.responsible_uid == nil || command.args.responsible_uid == accountID else { throw LocalError.message("Der alte Versandauftrag weist die Aufgabe einer anderen Person zu. Bitte zuerst in Todoist prüfen.") }
+                payload = frozen; return
+            }
+            guard !accountID.isEmpty, data.drafts[i].exportable else { throw LocalError.message("Bitte die Aufgabe zuerst prüfen und bestätigen.") }
             let uuid = UUID()
-            payload = try JSONEncoder().encode(TodoistSyncCommand(uuid: uuid.uuidString, temp_id: uuid.uuidString, args: TodoistSyncArguments(data.drafts[i])))
+            try TodoistLabels.validate(data.drafts[i].labels)
+            var arguments = TodoistSyncArguments(data.drafts[i])
+            arguments.responsible_uid = sharedProject ? accountID : nil
+            payload = try JSONEncoder().encode(TodoistSyncCommand(uuid: uuid.uuidString, temp_id: uuid.uuidString, args: arguments))
+            data.drafts[i].sendAccountID = accountID
             data.drafts[i].attemptID = uuid; data.drafts[i].frozenPayload = payload; data.drafts[i].selected = false
         }
         return payload
@@ -182,7 +203,7 @@ extension TaskInbox {
     func rejectSend(_ id: UUID, error: String) throws {
         try edit { data in
             guard let i = data.drafts.firstIndex(where: { $0.id == id }), data.drafts[i].exportChannel == nil else { return }
-            data.drafts[i].attemptID = nil; data.drafts[i].frozenPayload = nil
+            data.drafts[i].attemptID = nil; data.drafts[i].frozenPayload = nil; data.drafts[i].sendAccountID = nil
             data.drafts[i].reviewed = false; data.drafts[i].selected = false; data.drafts[i].exportError = error
         }
     }

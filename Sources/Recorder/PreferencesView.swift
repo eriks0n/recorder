@@ -305,9 +305,9 @@ struct TodoistPreferences: View {
             Section("Todoist verbinden") {
                 Text("Persönlichen API-Token aus Todoist → Einstellungen → Integrationen eintragen. Er wird ausschließlich im macOS-Schlüsselbund gespeichert.").font(.caption)
                 SecureField("Todoist-API-Token", text: $token)
-                Button("Im Schlüsselbund speichern") { model.connectTodoist(token: token); token = "" }.disabled(token.isEmpty || model.todoistBusy)
+                Button("Verbindung prüfen und sicher speichern") { model.connectTodoist(token: token); token = "" }.disabled(token.isEmpty || model.todoistBusy)
                 Button("Verbindung entfernen", role: .destructive) { model.disconnectTodoist() }.disabled(model.todoistBusy)
-                Button("Projekte und Abschnitte laden") { model.loadTodoistProjects() }.disabled(model.todoistBusy)
+                Button("Verbindung prüfen · Projekte und Tags laden") { model.loadTodoistProjects() }.disabled(model.todoistBusy)
                 if model.todoistBusy { ProgressView() }
                 if let status = model.todoistStatus { Text(status).font(.caption).textSelection(.enabled) }
             }

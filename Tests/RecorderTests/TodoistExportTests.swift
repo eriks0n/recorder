@@ -12,7 +12,7 @@ import XCTest
         return d
     }
     func testCSVQuotesUnicodeNewlinesAndUsesTodoistColumns() throws {
-        var d = draft(); d.title = "Bericht, \"Änderung\"\nprüfen"; d.deadline = "2026-10-30"; d.labels = "arbeit, follow-up"
+        var d = draft(); d.title = "Bericht, \"Änderung\"\nprüfen"; d.deadline = "2026-10-30"; d.labels = "@arbeit, follow-up, arbeit"
         let csv = try TodoistCSV.render([d])
         XCTAssertTrue(csv.contains("\"TYPE\",\"CONTENT\",\"DESCRIPTION\",\"PRIORITY\""))
         XCTAssertTrue(csv.contains("Bericht, \"\"Änderung\"\"\nprüfen")); XCTAssertTrue(csv.contains("@arbeit @follow-up"))
@@ -39,26 +39,26 @@ import XCTest
     func testFrozenSendSurvivesRestartAndUsesIdenticalPayload() throws {
         let inbox = TaskInbox(url: root.appendingPathComponent("inbox.json")), d = draft()
         try inbox.edit { $0.drafts = [d] }
-        let first = try inbox.prepareSend(d.id)
+        let first = try inbox.prepareSend(d.id, accountID: "me")
         let reopened = TaskInbox(url: inbox.url)
-        let second = try reopened.prepareSend(d.id)
+        let second = try reopened.prepareSend(d.id, accountID: "me")
         XCTAssertEqual(first, second); XCTAssertNotNil(reopened.data.drafts[0].attemptID)
         XCTAssertThrowsError(try reopened.save(d))
         try reopened.recordSend(d.id, remoteID: "remote123")
-        XCTAssertThrowsError(try reopened.prepareSend(d.id)); XCTAssertEqual(reopened.data.drafts[0].remoteID, "remote123")
+        XCTAssertThrowsError(try reopened.prepareSend(d.id, accountID: "me")); XCTAssertEqual(reopened.data.drafts[0].remoteID, "remote123")
     }
     func testFailedSendRetainsFrozenAttemptAndBlocksCSV() throws {
         let inbox = TaskInbox(url: root.appendingPathComponent("inbox.json")), d = draft()
         try inbox.edit { $0.drafts = [d] }
-        let payload = try inbox.prepareSend(d.id)
+        let payload = try inbox.prepareSend(d.id, accountID: "me")
         try inbox.recordSend(d.id, remoteID: nil, error: "timeout")
-        XCTAssertEqual(try inbox.prepareSend(d.id), payload)
+        XCTAssertEqual(try inbox.prepareSend(d.id, accountID: "me"), payload)
         XCTAssertThrowsError(try TodoistCSV.render(inbox.data.drafts))
     }
     func testCSVReceiptPreventsDirectSendAndSurvivesRestart() throws {
         let inbox = TaskInbox(url: root.appendingPathComponent("inbox.json")), d = draft()
         try inbox.edit { $0.drafts = [d] }; try inbox.markCSV([d.id])
-        XCTAssertThrowsError(try TaskInbox(url: inbox.url).prepareSend(d.id))
+        XCTAssertThrowsError(try TaskInbox(url: inbox.url).prepareSend(d.id, accountID: "me"))
     }
     func testSelectionRequiresReviewedCurrentSource() throws {
         let inbox = TaskInbox(url: root.appendingPathComponent("inbox.json")); var d = draft(); d.reviewed = false
@@ -109,7 +109,7 @@ import XCTest
     func testDefiniteServerRejectionReopensDraftButUncertainResponseDoesNot() async throws {
         let inbox = TaskInbox(url: root.appendingPathComponent("inbox.json")), d = draft()
         try inbox.edit { $0.drafts = [d] }
-        let payload = try inbox.prepareSend(d.id)
+        let payload = try inbox.prepareSend(d.id, accountID: "me")
         let command = try JSONDecoder().decode(TodoistSyncCommand.self, from: payload)
         let client = TodoistClient { request in
             let body = try JSONSerialization.data(withJSONObject: ["sync_status": [command.uuid: ["error_code": 12, "error": "private server detail"]]])
@@ -121,9 +121,9 @@ import XCTest
             try inbox.rejectSend(d.id, error: error.localizedDescription)
         }
         XCTAssertFalse(inbox.data.drafts[0].locked); XCTAssertFalse(inbox.data.drafts[0].reviewed)
-        XCTAssertThrowsError(try inbox.prepareSend(d.id))
+        XCTAssertThrowsError(try inbox.prepareSend(d.id, accountID: "me"))
         var edited = inbox.data.drafts[0]; edited.projectID = "corrected"; try inbox.save(edited); try inbox.review(d.id)
-        XCTAssertNotEqual(try inbox.prepareSend(d.id), payload)
+        XCTAssertNotEqual(try inbox.prepareSend(d.id, accountID: "me"), payload)
     }
 
 }
