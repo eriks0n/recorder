@@ -10,17 +10,19 @@ Der Plan ist in zwei Stufen geteilt: **V1** liefert schnell ein im Alltag nutzba
 
 ## Umsetzungsstand und genehmigte Abweichungen (25. Oktober 2026)
 
+**Aktuelle Nutzeränderung:** Intern/extern und Kalenderteilnehmerfilter entfallen. Ein einzelner Schalter aktiviert Stimmanalyse, Matching und Enrollment; ausgeschaltet werden keine Profile geladen oder verwendet. Die folgenden ursprünglichen Planabschnitte zu Kategorien/Kalenderfiltern sind dadurch überholt. Zusätzlich gibt es eine standardmäßig ausgeschaltete Sofortlöschung von Audio nach erfolgreicher Transkription und Zusammenfassung; sie erzwingt den vollständigen Offline-Durchlauf und die automatische Zusammenfassung. Fehler oder Abbruch behalten Wiederherstellungs-Audio. Die bestehende zeitgesteuerte Aufbewahrung bleibt unabhängig davon verfügbar.
+
 Der Nutzer hat die Tests mit echten Aufnahmen auf später verschoben und ausdrücklich die Übernahme von `cjonesde/recorder` mit WhisperKit statt Parakeet/FluidAudio genehmigt. Diese Entscheidung hat Vorrang vor den ursprünglichen Modellvorgaben. V2 bleibt außerhalb des Auftrags.
 
 - Sicherheitsprüfung des ursprünglichen Quellstands vor Ausführung: dokumentiert in `docs/security-review.md`; keine Hinweise auf bösartigen Code gefunden, keine Garantie vollständiger Schwachstellenfreiheit.
 - P0: Quellprüfung, feste Bibliotheks-/Modellrevisionen und lokaler Build erledigt. Echter Modellvergleich, Download-/RAM-Messwerte und Aufnahmeprüfung bleiben offen. Anfangs nur CLT-Umgebung; inzwischen vollständiges Xcode 27.1 samt Metal installiert und erfolgreich verwendet. Kein vorgetäuschter P0-Pass.
 - Basis: cjonesde-Fork bei f1ba832, Lizenz/Herkunft in `docs/fork-review.md`.
 - P1/P2: lokale WhisperKit-/SpeakerKit-Integration; ausdrücklich gestartete Modelldownloads; Offline-Laden ohne Tokenizer-Netzwerkfallback; beide Kanäle separat diarisiert, Wortzeitstempel und Überlappungsmarker. Modellqualität noch ungemessen.
-- P3: explizite interne/eigene Profile, Meetingnamen für externe Personen, Bereichs-/Kalender-/Modellfilter, Mindestabstand zum zweitbesten Treffer. Unbestätigte Referenzen nur im RAM; Namensvorschläge bleiben bis zur Kalibrierung deaktiviert.
+- P3: optionales Speaker Fingerprinting mit vollständigem Ein-/Ausschalter, explizit bestätigte Profile ohne Personenkategorien, Bereichs-/Modellfilter und Mindestabstand zum zweitbesten Treffer. Unbestätigte Referenzen nur im RAM; Vorschläge erfordern Bestätigung.
 - P4: Abbruch/erneute Verarbeitung, vollständige Ergebnisgenerationen mit atomarem Zeiger, private Dateirechte, lokaler Standardordner und Synchronisationshinweis, blockweises Audiomischen. Pausen behalten die gemeinsame Zeitachse durch Stille. Hardware-/Langlaufabnahme offen.
 - P5: lokaler MLX-Adapter, Tokenbudget/Abschnitte/Konsolidierung, maximal zwei Reparaturversuche, Schema-/Beleg-/Frist-/Zuständigenprüfung, vier Exportabschnitte und separate Fehleranzeige implementiert. **MLX-Build und Inferenz sind inzwischen verifiziert**: Xcode 27.1 und Metal Toolchain installiert; vollständige App gebaut. Künstliches deutsches Meeting erzeugt vier Abschnitte, beide expliziten Aufgaben und gültige Belege. Genannte Frist erhalten, fehlende Frist leer. Kein Cloud-Fallback.
 
-Prüfstand: 56 ausführbare Kernprüfungen bestanden (ohne echte Meetings, mit synthetischen Testtönen); Release-App gebaut, Ressourcen gebündelt und Ad-hoc-Signatur geprüft. Nach Installation von Xcode wurden 131 XCTest-Tests ohne Fehler ausgeführt, davon 12 Geräte-/Aufnahmefälle bewusst ausgelassen. Der frühere CLT-Blocker ist damit behoben.
+Prüfstand: 56 ausführbare Kernprüfungen bestanden (ohne echte Meetings, mit synthetischen Testtönen); Release-App gebaut, Ressourcen gebündelt und Ad-hoc-Signatur geprüft. Nach Installation von Xcode wurden 149 XCTest-Tests ohne Fehler ausgeführt, davon 12 Geräte-/Aufnahmefälle bewusst ausgelassen. Der frühere CLT-Blocker ist damit behoben.
 
 V1 ist damit als Implementierung fortgeschritten, aber noch nicht vollständig abgenommen. Insbesondere werden die ursprünglichen Qualitätsziele nicht als erreicht behauptet. Die aktuelle Bedienung und offenen Prüfschritte stehen im README.
 
@@ -270,4 +272,10 @@ Korrigiert: Spracherkennung zuerst; stille/leere Kanäle überspringen; fehlende
 - Frei vergebbare Meetingnamen vor Aufnahmebeginn und nachträgliche Umbenennung über das Aktionsmenü. Kalendermetadaten bleiben erhalten, Ordner werden nicht verschoben. Zusammenfassungen bleiben nach reinem Umbenennen gültig.
 - Optionale Aufbewahrung nach 1–3650 Tagen (standardmäßig aus, Anfangswert 30 Tage). Prüfung beim App-Start und stündlich. Nur Transkript-/Zusammenfassungstexte in Markdown/JSON bleiben; die aktuellen vollständigen Generationen werden vor jeder Löschung als Text gesichert. Ohne fertiges Transkript wird nichts gelöscht. Aktive Aufnahmen, Mischvorgänge, Wiedergabe und Verarbeitung sperren die Bereinigung.
 - 19 neue Tests prüfen Alter, Text-/Zusammenfassungserhalt, Wiederholbarkeit, fehlende/kaputte Transkripte, unvollständige Zusammenfassungen, fremde Ordner, Symlinks, Groß-/Kleinschreibung und Umbenennung. Zusammenfassungshashes sind gegen unterschiedliche Wörterbuchreihenfolgen stabilisiert.
-- Gesamt: 131 XCTest-Tests, 12 ausgelassen, 0 Fehler; 56 zusätzliche Kernprüfungen bestanden. Vollständige Release-App mit GPU-Ressourcen gebaut und signiert. Benutzeraufnahmen wurden nicht automatisch gelöscht; Testlöschungen betrafen nur eigens angelegte temporäre Fixtures. Reale Qualitäts-/Langlaufabnahme bleibt offen.
+- Gesamt: 149 XCTest-Tests, 12 ausgelassen, 0 Fehler; 56 zusätzliche Kernprüfungen bestanden. Vollständige Release-App mit GPU-Ressourcen gebaut und signiert. Benutzeraufnahmen wurden nicht automatisch gelöscht; Testlöschungen betrafen nur eigens angelegte temporäre Fixtures. Reale Qualitäts-/Langlaufabnahme bleibt offen.
+
+### Ergänzung: Audio-Sofortlöschung und Fingerprinting
+
+- Audio-Sofortlöschung prüft beide gültigen Textresultate und den vollständigen Offline-Durchlauf vor dem ersten Löschen. Fremde Anhänge bleiben bestehen; Audio-Verknüpfungen werden nur selbst entfernt.
+- Fingerprinting-Schalter sperrt auch verspätete Ergebnisse laufender Analysen; gespeicherte Profile bleiben beim Ausschalten auf dem Datenträger und sind separat löschbar. Kategorien und Teilnehmer-E-Mail sind nur noch lesbare Altdaten, keine Bedien- oder Matchingkriterien.
+- Prüfstand: 149 XCTest-Tests, 12 ausgelassen, 0 Fehler. Neue Tests verwenden ausschließlich temporäre Dateien und synthetische Daten.
