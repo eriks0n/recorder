@@ -29,6 +29,8 @@ struct TaskDraft: Codable, Identifiable, Equatable {
     var selected = false
     var stale = false
     var dismissed = false
+    var duplicateWarning: String?
+    var duplicateApproved: Bool?
     var projectID = ""
     var projectName = ""
     var sectionID = ""
@@ -43,7 +45,7 @@ struct TaskDraft: Codable, Identifiable, Equatable {
     var attemptID: UUID?
     var frozenPayload: Data?
     var locked: Bool { exportChannel != nil || attemptID != nil }
-    var exportable: Bool { reviewed && !stale && !dismissed && kind != "cancelled" && responsibility != .unresolved && !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && exportChannel == nil }
+    var exportable: Bool { (duplicateWarning == nil || duplicateApproved == true) && reviewed && !stale && !dismissed && kind != "cancelled" && responsibility != .unresolved && !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && exportChannel == nil }
     var exportTitle: String { responsibility == .waiting ? "Warten auf \(ownerName ?? "Rückmeldung"): \(title)" : title }
     var exportDescription: String {
         var lines = ["Meeting: \(meetingTitle)", "Bereich: \(scope)", "Aufnahme: \(ISO8601DateFormatter().string(from: meetingDate))"]
@@ -90,11 +92,28 @@ enum MeetingDateResolver {
 struct TaskProjectMapping: Codable, Equatable {
     var projectID: String; var projectName: String; var sectionID: String; var sectionName: String
 }
+struct TaskCSVBatch: Codable, Identifiable {
+    var id = UUID()
+    var taskIDs: [UUID]
+    var content: String
+    var savedPath: String?
+}
 struct TaskInboxData: Codable {
     var schemaVersion = 1
     var drafts: [TaskDraft] = []
     var myName = ""
     var mappings: [String: TaskProjectMapping] = [:]
+    var csvBatches: [TaskCSVBatch] = []
+    init() {}
+    enum CodingKeys: String, CodingKey { case schemaVersion, drafts, myName, mappings, csvBatches }
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        schemaVersion = try c.decode(Int.self, forKey: .schemaVersion)
+        drafts = try c.decode([TaskDraft].self, forKey: .drafts)
+        myName = try c.decodeIfPresent(String.self, forKey: .myName) ?? ""
+        mappings = try c.decodeIfPresent([String: TaskProjectMapping].self, forKey: .mappings) ?? [:]
+        csvBatches = try c.decodeIfPresent([TaskCSVBatch].self, forKey: .csvBatches) ?? []
+    }
 }
 @MainActor @Observable final class TaskInbox {
     private(set) var data = TaskInboxData()
@@ -131,7 +150,7 @@ struct TaskInboxData: Codable {
         try edit { data in
             guard let i = data.drafts.firstIndex(where: { $0.id == id }) else { return }
             let d = data.drafts[i]
-            guard !d.locked, !d.stale, d.kind != "cancelled", d.responsibility != .unresolved, !d.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+            guard !d.locked, !d.stale, d.kind != "cancelled", (d.duplicateWarning == nil || d.duplicateApproved == true), d.responsibility != .unresolved, !d.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
                   d.deadline.isEmpty || MeetingDateResolver.validISO(d.deadline), d.scheduled.isEmpty || MeetingDateResolver.validISO(d.scheduled), (1...4).contains(d.priority),
                   d.sectionID.isEmpty || !d.projectID.isEmpty else { throw LocalError.message("Bitte Zuständigkeit, Titel, Projekt und Datumsfelder prüfen.") }
             data.drafts[i].reviewed = true; data.drafts[i].selected = true
@@ -151,6 +170,7 @@ struct TaskInboxData: Codable {
             let meeting = transcript.meeting
             let actions = summary.content.actionItems
             var seen: Set<UUID> = []
+            let priorIDs = Set(data.drafts.map(\.id))
             for action in actions {
                 let turns = action.evidence.map(\.turnID).sorted().joined(separator: ",")
                 let normalized = action.task.lowercased().split(whereSeparator: \.isWhitespace).joined(separator: " ")
@@ -175,6 +195,9 @@ struct TaskInboxData: Codable {
                     var d = TaskDraft(meetingID: meeting.id, meetingTitle: meeting.title ?? "Aufnahme", scope: meeting.scope, meetingDate: meeting.startedAt,
                         sourceHash: transcript.hash, sourceKey: key, sourceTask: action.task, sourceOwner: action.owner, ownerID: ownerID, ownerName: ownerName,
                         sourceDeadline: action.deadline, kind: action.kind, evidence: action.evidence, evidenceTimes: times, title: action.task)
+                    if matching.contains(where: { priorIDs.contains(data.drafts[$0].id) }) {
+                        d.duplicateWarning = "Es gibt bereits Aufgaben aus derselben Textstelle. Bitte vor dem Export prüfen, ob dies eine weitere Aufgabe oder ein Duplikat ist."
+                    }
                     d.deadline = suggestion ?? ""; d.dateHint = action.deadline == nil ? nil : suggestion == nil ? "Frist unklar – bitte prüfen" : "Datum aus dem Meetingdatum abgeleitet – bitte bestätigen"
                     if !data.myName.isEmpty, ownerName?.caseInsensitiveCompare(data.myName) == .orderedSame { d.responsibility = .mine }
                     if let mapping = data.mappings[meeting.scope] { d.projectID = mapping.projectID; d.projectName = mapping.projectName; d.sectionID = mapping.sectionID; d.sectionName = mapping.sectionName }

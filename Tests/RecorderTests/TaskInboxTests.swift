@@ -81,4 +81,26 @@ import XCTest
         XCTAssertThrowsError(try inbox.edit { $0.myName = "Anna" })
         XCTAssertEqual(try String(contentsOf: url, encoding: .utf8), "broken")
     }
+    func testAmbiguousRegenerationRequiresExplicitDuplicateReview() throws {
+        let inbox = TaskInbox(url: root.appendingPathComponent("inbox.json")); let (t, original) = source(); var s = original
+        try inbox.ingest(s, transcript: t)
+        var d = inbox.data.drafts[0]; d.responsibility = .mine
+        try inbox.save(d); try inbox.review(d.id)
+        try inbox.edit { $0.drafts[0].exportChannel = "Todoist" }
+        var a = s.content.actionItems[0]; a.task = "Bericht verschicken"
+        var b = a; b.task = "Bericht abstimmen"
+        s.content.actionItems = [a,b]; try inbox.ingest(s, transcript: t)
+        let additional = inbox.data.drafts.filter { $0.id != d.id }
+        XCTAssertEqual(additional.count, 2); XCTAssertTrue(additional.allSatisfy { $0.duplicateWarning != nil })
+        var new = additional[0]; new.responsibility = .mine; try inbox.save(new)
+        XCTAssertThrowsError(try inbox.review(new.id))
+        new.duplicateApproved = true; try inbox.save(new); try inbox.review(new.id)
+        XCTAssertTrue(inbox.data.drafts.first { $0.id == new.id }!.exportable)
+    }
+    func testInboxBeforeCSVFeatureDecodesWithEmptyBatches() throws {
+        let json = Data("{\"schemaVersion\":1,\"drafts\":[],\"myName\":\"Anna\",\"mappings\":{}}".utf8)
+        let data = try JSONDecoder().decode(TaskInboxData.self, from: json)
+        XCTAssertEqual(data.myName, "Anna"); XCTAssertTrue(data.csvBatches.isEmpty)
+    }
+
 }

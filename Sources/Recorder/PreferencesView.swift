@@ -17,6 +17,8 @@ struct PreferencesView: View {
         TabView {
             LocalProcessingPreferences()
                 .tabItem { Label("Local", systemImage: "internaldrive") }
+            TodoistPreferences()
+                .tabItem { Label("Todoist", systemImage: "checkmark.circle") }
             GeneralPreferences()
                 .tabItem { Label("General", systemImage: "gearshape") }
 
@@ -292,5 +294,28 @@ private struct SpeakerPreferences: View {
             }
         }
         .formStyle(.grouped)
+    }
+}
+
+struct TodoistPreferences: View {
+    @Environment(RecorderModel.self) private var model
+    @State private var token = ""
+    var body: some View {
+        Form {
+            Section("Todoist verbinden") {
+                Text("Persönlichen API-Token aus Todoist → Einstellungen → Integrationen eintragen. Er wird ausschließlich im macOS-Schlüsselbund gespeichert.").font(.caption)
+                SecureField("Todoist-API-Token", text: $token)
+                Button("Im Schlüsselbund speichern") { model.connectTodoist(token: token); token = "" }.disabled(token.isEmpty || model.todoistBusy)
+                Button("Verbindung entfernen", role: .destructive) { model.disconnectTodoist() }.disabled(model.todoistBusy)
+                Button("Projekte und Abschnitte laden") { model.loadTodoistProjects() }.disabled(model.todoistBusy)
+                if model.todoistBusy { ProgressView() }
+                if let status = model.todoistStatus { Text(status).font(.caption).textSelection(.enabled) }
+            }
+            Section("Aufgaben vorbereiten") {
+                Button("Aufgaben-Inbox öffnen…") { TaskInboxWindowController.shared.show(model: model) }
+                Text("Aufgaben bleiben lokal, bis du sie als CSV exportierst oder ausdrücklich an Todoist sendest. Beim Senden werden nur die ausgewählten Aufgaben mit Meetingname, kurzem Beleg und deinen Notizen übertragen; kein Audio und kein vollständiges Transkript.").font(.caption)
+                Text("Der persönliche Token berechtigt zum Zugriff auf dein Todoist-Konto. Alternativ funktioniert der CSV-Export ohne Verbindung.").font(.caption)
+            }
+        }.formStyle(.grouped)
     }
 }

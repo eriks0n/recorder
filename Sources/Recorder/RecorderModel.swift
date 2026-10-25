@@ -12,7 +12,11 @@ final class RecorderModel {
 
     @ObservationIgnored private var appLaunchObserver: NSObjectProtocol?
 
-    init() {
+    init(processingQueue: ProcessingQueue? = nil, taskInbox: TaskInbox? = nil,
+         processJob: ((ProcessingJob) async throws -> Void)? = nil) {
+        self.processingQueue = processingQueue ?? ProcessingQueue()
+        self.taskInbox = taskInbox ?? TaskInbox()
+        self.processJobOverride = processJob
         // MenuBarExtra content is lazy. Initialize scheduled cleanup even when the panel is never opened.
         appLaunchObserver = NotificationCenter.default.addObserver(forName: NSApplication.didFinishLaunchingNotification,
                                                                    object: nil, queue: .main) { [weak self] _ in
@@ -141,7 +145,6 @@ final class RecorderModel {
     var modelDownloadStatus = ""
     var modelDownloadRunning = false
     var recordingPath = "" { didSet { Preferences.recordingPath = recordingPath } }
-    @ObservationIgnored private var processingTask: Task<Void, Never>?
     @ObservationIgnored private var downloadTask: Task<Void, Never>?
     @ObservationIgnored private var processingID = UUID()
     @ObservationIgnored private var recordingGeneration = UUID()
@@ -178,9 +181,15 @@ final class RecorderModel {
         let startedAt: Date
     }
     @ObservationIgnored private var lastTranscription: PendingTranscription?
-    let taskInbox = TaskInbox()
+    let taskInbox: TaskInbox
     var taskInboxStatus: String?
-    let processingQueue = ProcessingQueue()
+    var todoistProjects: [TodoistChoice] = []
+    var todoistSections: [TodoistChoice] = []
+    var todoistCollaborators: [TodoistChoice] = []
+    var todoistStatus: String?
+    var todoistBusy = false
+    let processingQueue: ProcessingQueue
+    @ObservationIgnored private let processJobOverride: ((ProcessingJob) async throws -> Void)?
     @ObservationIgnored private var activeProcessingJob: UUID?
     @ObservationIgnored private var queueWorker: Task<Void, Never>?
     var queueStatus: String?
@@ -291,9 +300,14 @@ final class RecorderModel {
     // MARK: - Recording control
 
     func startRecording(meeting: Meeting?) {
+        defer { if state == .idle { pumpProcessingQueue() } }
         guard state == .idle else { return }
         guard !retentionRunning else { statusMessage = "Dateien werden gerade bereinigt. Bitte kurz warten."; return }
 
+        let requestedMode = audioHandlingMode
+        guard !requestedMode.producesNothing(liveTranscriptionEnabled: liveTranscriptionEnabled) else {
+            statusMessage = "Transcript-only mode needs live transcription switched on."; return
+        }
         cancelProcessing(requeue: true)
         recordingGeneration = UUID()
         lastDocument = nil
@@ -543,18 +557,19 @@ final class RecorderModel {
                 mixError = error
             }
 
+            let mixFailure = mixError?.localizedDescription
             await MainActor.run { [weak self] in
                 guard let self else { return }
                 self.refreshRecordings()
                 guard self.state == .idle, self.recordingGeneration == recordingGeneration else { return }
                 self.lastTranscription = pending
-                self.statusMessage = mixError == nil
+                self.statusMessage = mixFailure == nil
                     ? "Saved \(outputURL.lastPathComponent)"
-                    : "Mix failed (raw files kept): \(mixError!.localizedDescription)"
+                    : "Mix failed (raw files kept): \(mixFailure!)"
                 self.refreshRecordings()
                 if !wantsTranscript {
                     self.transcriptionState = .idle
-                    if mixError == nil {
+                    if mixFailure == nil {
                         self.statusMessage = "Saved \(outputURL.lastPathComponent) · transcription off"
                     }
                 }
@@ -565,10 +580,10 @@ final class RecorderModel {
 
             await MainActor.run { [weak self] in
                 guard let self else { return }
-                if mixError == nil, needsOfflineTranscription {
+                if mixFailure == nil, needsOfflineTranscription {
                     self.startTranscription(pending)
                 } else if let liveResult, !liveResult.isEmpty, liveResult.complete {
-                    self.writeLiveTranscript(liveResult.lines, pending: pending, keepStatus: mixError != nil)
+                    self.writeLiveTranscript(liveResult.lines, pending: pending, keepStatus: mixFailure != nil)
                 } else if let liveResult, !liveResult.isEmpty {
                     self.writeLiveTranscript(liveResult.lines, pending: pending, keepStatus: true)
                 } else {
@@ -717,7 +732,7 @@ final class RecorderModel {
         catch { queueStatus = error.localizedDescription }
     }
     func pumpProcessingQueue() {
-        guard initialized, state == .idle, !retentionRunning, pendingSaveFolders.isEmpty,
+        guard state == .idle, !retentionRunning, pendingSaveFolders.isEmpty,
               queueWorker == nil, let job = processingQueue.next else { return }
         do { try processingQueue.update(job.id, state: .running) }
         catch { queueStatus = error.localizedDescription; return }
@@ -739,7 +754,8 @@ final class RecorderModel {
             }
             do {
                 try RecordingRetention.requireSafeFolder(job.folder)
-                if job.kind == .transcription { try await self.runQueuedTranscription(job, operation: operation) }
+                if let handler = self.processJobOverride { try await handler(job) }
+                else if job.kind == .transcription { try await self.runQueuedTranscription(job, operation: operation) }
                 else { try await self.generateQueuedSummary(job, operation: operation) }
                 try Task.checkCancellation()
                 try self.processingQueue.update(job.id, state: .done)
@@ -765,77 +781,79 @@ final class RecorderModel {
         let fingerprintToken = live.fingerprinting.token
         guard let audioURL = job.audio else { throw LocalError.message("Kein Audio für erneute Transkription vorhanden.") }
         try RecordingRetention.requireContainedRegularFile(audioURL, in: job.folder)
-                try Task.checkCancellation()
-                await self.live.loadModel(job.whisperModel, downloadIfNeeded: false)
-                try Task.checkCancellation()
-                self.live.language = job.language == "auto" ? nil : job.language
-                let offline = try await self.live.transcribeFile(audioURL)
-                try Task.checkCancellation()
-                guard self.processingID == operation else { throw CancellationError() }
-                guard !offline.lines.isEmpty else {
-                    throw LocalError.message("Die Aufnahme enthält keinen erkennbaren Text.")
-                }
-                let names = offline.speakerNames
-                let record = (try? PrivateStorage.read(MeetingRecord.self, from: pending.folderURL.appendingPathComponent("meeting.json"))) ?? MeetingRecord(scope: "default", startedAt: pending.startedAt, title: pending.meetingTitle)
-                var proposals: [String: String] = [:]
-                var centroidsID: String?
+        try Task.checkCancellation()
+        await self.live.loadModel(job.whisperModel, downloadIfNeeded: false)
+        try Task.checkCancellation()
+        self.live.language = job.language == "auto" ? nil : job.language
+        let offline = try await self.live.transcribeFile(audioURL)
+        try Task.checkCancellation()
+        guard self.processingID == operation else { throw CancellationError() }
+        guard !offline.lines.isEmpty else {
+            throw LocalError.message("Die Aufnahme enthält keinen erkennbaren Text.")
+        }
+        let names = offline.speakerNames
+        let record = (try? PrivateStorage.read(MeetingRecord.self, from: pending.folderURL.appendingPathComponent("meeting.json"))) ?? MeetingRecord(scope: "default", startedAt: pending.startedAt, title: pending.meetingTitle)
+        var proposals: [String: String] = [:]
+        var centroidsID: String?
 
-                if self.voiceProfilesEnabled, self.live.fingerprinting.accepts(fingerprintToken), !offline.clusters.isEmpty {
-                    let assignments = SpeakerNaming.resolve(
-                        clusters: offline.clusters,
-                        defaultNames: offline.speakerNames,
-                        profiles: SpeakerNaming.eligible(self.speakerStore.profiles, meeting: record)
+        if self.voiceProfilesEnabled, self.live.fingerprinting.accepts(fingerprintToken), !offline.clusters.isEmpty {
+            let assignments = SpeakerNaming.resolve(
+                clusters: offline.clusters,
+                defaultNames: offline.speakerNames,
+                profiles: SpeakerNaming.eligible(self.speakerStore.profiles, meeting: record)
+            )
+            for (id, assignment) in assignments {
+                if assignment.profileID != nil { proposals[id] = assignment.name }
+            }
+
+            // `appliedProfileID` stays nil even where a profile matched: an
+            // automatic match names a speaker but never writes a voiceprint, so
+            // the database only ever grows from a correction the user saw. It also
+            // keeps confirming a correct guess an enrollment rather than a no-op.
+            let voiceprints = PendingSpeakers(
+                id: UUID().uuidString,
+                createdAt: Date(),
+                clusters: offline.clusters.reduce(into: [:]) { result, entry in
+                    result[entry.key] = PendingSpeakers.Cluster(
+                        vector: entry.value.centroid,
+                        speechSeconds: entry.value.speechSeconds,
+                        appliedProfileID: nil
                     )
-                    for (id, assignment) in assignments {
-                        if assignment.profileID != nil { proposals[id] = assignment.name }
-                    }
-
-                    // `appliedProfileID` stays nil even where a profile matched: an
-                    // automatic match names a speaker but never writes a voiceprint, so
-                    // the database only ever grows from a correction the user saw. It also
-                    // keeps confirming a correct guess an enrollment rather than a no-op.
-                    let voiceprints = PendingSpeakers(
-                        id: UUID().uuidString,
-                        createdAt: Date(),
-                        clusters: offline.clusters.reduce(into: [:]) { result, entry in
-                            result[entry.key] = PendingSpeakers.Cluster(
-                                vector: entry.value.centroid,
-                                speechSeconds: entry.value.speechSeconds,
-                                appliedProfileID: nil
-                            )
-                        }
-                    )
-                    do {
-                        try self.speakerStore.writePending(voiceprints)
-                        centroidsID = voiceprints.id
-                    } catch {
-                        Self.log.error("could not store voiceprints: \(error.localizedDescription)")
-                    }
                 }
+            )
+            do {
+                try self.speakerStore.writePending(voiceprints)
+                centroidsID = voiceprints.id
+            } catch {
+                Self.log.error("could not store voiceprints: \(error.localizedDescription)")
+            }
+        }
 
-                var document = TranscriptDocument(
-                    meetingTitle: pending.meetingTitle,
-                    attendees: pending.attendees,
-                    startedAt: pending.startedAt,
-                    audioName: audioURL.lastPathComponent,
-                    model: self.live.loadedModelName ?? self.live.modelName,
-                    isPolished: true,
-                    lines: offline.lines.map {
-                        TranscriptDocument.StoredLine(time: $0.time, text: $0.text, speakerID: $0.speaker, endTime: $0.endTime, channel: $0.channel, overlap: $0.overlap)
-                    },
-                    speakerNames: names,
-                    speakerCentroidsID: centroidsID
-                )
-                document.schemaVersion = 1; document.meetingRecord = record; document.proposedNames = proposals
-                document.processingWarnings = offline.warnings
-                let markdown = try TranscriptRepository.publish(document, folder: pending.folderURL)
-                document = try TranscriptDocument.load(from: pending.folderURL.appendingPathComponent("transcript.json"))
-                self.presentProcessed(document, pending: pending, markdown: markdown)
-                self.live.releaseModels()
-                if job.summarize {
-                    try self.processingQueue.update(job.id, state: .running, kind: .summary)
-                    try await self.generateQueuedSummary(job, operation: operation)
-                }
+        var document = TranscriptDocument(
+            meetingTitle: pending.meetingTitle,
+            attendees: pending.attendees,
+            startedAt: pending.startedAt,
+            audioName: audioURL.lastPathComponent,
+            model: self.live.loadedModelName ?? self.live.modelName,
+            isPolished: true,
+            lines: offline.lines.map {
+                TranscriptDocument.StoredLine(time: $0.time, text: $0.text, speakerID: $0.speaker, endTime: $0.endTime, channel: $0.channel, overlap: $0.overlap)
+            },
+            speakerNames: names,
+            speakerCentroidsID: centroidsID
+        )
+        document.meetingTitle = record.title
+        document.schemaVersion = 1; document.meetingRecord = record; document.proposedNames = proposals
+        try taskInbox.invalidate(meetingID: record.id)
+        document.processingWarnings = offline.warnings
+        let markdown = try TranscriptRepository.publish(document, folder: pending.folderURL)
+        document = try TranscriptDocument.load(from: pending.folderURL.appendingPathComponent("transcript.json"))
+        self.presentProcessed(document, pending: pending, markdown: markdown)
+        self.live.releaseModels()
+        if job.summarize {
+            try self.processingQueue.update(job.id, state: .running, kind: .summary)
+            try await self.generateQueuedSummary(job, operation: operation)
+        }
     }
 
     /// Compose the transcript document, write it to transcript.md, and update
@@ -968,7 +986,7 @@ final class RecorderModel {
         }
         queueWorker?.cancel()
         activeProcessingJob = nil
-        processingTask?.cancel(); processingTask = nil; processingID = UUID()
+        processingID = UUID()
         playbackTask?.cancel(); referencePlayer?.stop()
         if transcriptionState == .running { transcriptionState = .idle }
         summaryStatus = nil
