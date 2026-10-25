@@ -8,7 +8,7 @@ Basis: [tobi/recorder](https://github.com/tobi/recorder), erweitert mit dem [For
 
 Die vollständige App wurde auf diesem Mac mit Xcode 27.1 und Apples Metal Toolchain gebaut und signiert. WhisperKit/SpeakerKit sowie die lokale MLX-Zusammenfassung sind integriert. Das bereits installierte Qwen3-4B-4bit-Modell wurde anhand eines künstlichen deutschen Meetings getestet: beide ausdrücklichen Aufgaben, gültige Belege und die genannte Frist wurden korrekt ausgegeben; eine fehlende Frist blieb leer.
 
-Prüfstand: **149 XCTest-Tests ohne Fehler, davon 12 bewusst ausgelassene Geräte-/Aufnahmetests**, sowie **56 zusätzliche Kernprüfungen**. Das ersetzt weiterhin nicht die Langlauf- und Qualitätsabnahme mit echten Meetings oder den Vergleich mehrerer LLM-Größen.
+Prüfstand: **179 XCTest-Tests ohne Fehler, davon 12 bewusst ausgelassene Geräte-/Aufnahmetests**, sowie **56 zusätzliche Kernprüfungen**. Das ersetzt weiterhin nicht die Langlauf- und Qualitätsabnahme mit echten Meetings oder den Vergleich mehrerer LLM-Größen.
 
 ## Bauen und starten
 
@@ -46,6 +46,16 @@ Nach Aktivierung prüft die App beim Start und danach stündlich, solange sie l�
 
 **Jetzt bereinigen…** zeigt vor einer manuellen Bereinigung eine Bestätigung. Beim Entwickeln und Testen wurde diese Funktion ausschließlich mit temporären Testdateien ausgeführt; vorhandene Benutzeraufnahmen wurden nicht bereinigt.
 
+## Aufgaben-Inbox und Todoist
+
+Aufnahmen werden nach dem Speichern in einer dauerhaften Warteschlange verarbeitet. Neue Aufnahmen haben Vorrang; unterbrochene Aufträge werden später fortgesetzt und überleben einen Neustart. Fehler und Wiederholen stehen unter **Settings → Local → Verarbeitung**.
+
+**Aufgaben-Inbox öffnen…** sammelt Aufgaben aus allen gespeicherten Zusammenfassungen. Zuständigkeit, Belege und Termine prüfen, Zielprojekt wählen und **Speichern und als geprüft auswählen** anklicken. Anschließend als Todoist-CSV exportieren oder ausgewählte Aufgaben ausdrücklich direkt übertragen. Eine spätere Sprecherkorrektur verlangt erneute Prüfung; eigene Aufgabentitel bleiben erhalten. Termine werden aus dem Meetingdatum vorgeschlagen.
+
+Für direkte Übertragung unter **Settings → Todoist** einen persönlichen API-Token im macOS-Schlüsselbund speichern. Erst die ausdrücklich gewählten Aufgaben mit kurzen Belegen verlassen den Mac; Audio und vollständige Transkripte bleiben lokal. CSV funktioniert ohne Verbindung. Exportstatus und feste Auftragsnummern schützen vor unbeabsichtigten Wiederholungen. Eine CSV nur einmal importieren.
+
+Bedienung, Speicherorte, Duplikatschutz und Grenzen: [Aufgaben-Inbox und Todoist](docs/task-inbox-todoist.md).
+
 ## Dateien und Datenschutz
 
 Neue Aufnahmen liegen standardmäßig unter `~/Library/Application Support/Recorder/Recordings`. Ein anderer Ordner kann unter **Local** gewählt werden. Bei erkannten Cloud-/Synchronisationspfaden erscheint ein Hinweis. Auch die bisherige Bibliothek unter `~/Documents/Recordings` wird angezeigt; alte Dateien werden nicht verschoben.
@@ -70,7 +80,7 @@ Modelle und bestätigte Stimmprofile liegen separat in Application Support. Neue
 RECORDER_TEST_LLM=1 ./scripts/test.sh -c release --filter MeetingSummaryIntegrationTests
 ```
 
-Aktueller Prüfstand: **149 XCTest-Tests ohne Fehler (12 ausgelassen)** und **56 Kernprüfungen bestanden**; vollständige MLX-Release-App gebaut und Signatur geprüft.
+Aktueller Prüfstand: **179 XCTest-Tests ohne Fehler (12 ausgelassen)** und **56 Kernprüfungen bestanden**; vollständige MLX-Release-App gebaut und Signatur geprüft.
 
 Die eigenständig ausführbaren Kernprüfungen brauchen weder Modelle noch Mikrofonzugriff. Sie prüfen Bereichs-/Modellfilter, Mehrdeutigkeit, Enrollment, Dateirechte, Belege, Zusammenfassungsgültigkeit, atomare Veröffentlichung, Abbruch und Audiokonvertierung mit synthetischen Testtönen. Die geerbten XCTest-Tests sind im Repository erhalten. Tests mit echten Geräten/Modellen sind opt-in und verwenden die in den Testdateien dokumentierten Umgebungsvariablen. Die ausgelassenen Geräte-/Aufnahmefälle werden hier nicht als bestanden gewertet.
 
@@ -82,7 +92,7 @@ Die eigenständig ausführbaren Kernprüfungen brauchen weder Modelle noch Mikro
 - 60–90-Minuten-Lauf, Pause/Fortsetzen, Gerätewechsel und Lautsprecherbetrieb prüfen. Abbruch erfolgt kooperativ; laufende Modelloperationen können bis zum nächsten Abbruchpunkt weiterlaufen.
 - Netzwerkfreiheit während der Verarbeitung nach dem Modelldownload zusätzlich im Laufzeitversuch nachweisen.
 
-Kein Push, keine Veröffentlichung und kein Beginn von V2. Siehe [Implementierungsplan](docs/implementation-plan.md), [Sicherheitsprüfung](docs/security-review.md) und [Modellherkunft](docs/model-provenance.md).
+Der bisherige Stand wurde auf den Entwicklungsbranch gepusht; die Aufgaben-Inbox/Todoist-Erweiterung wurde anschließend ausdrücklich beauftragt. Keine Veröffentlichung einer Release-Version. Siehe [Implementierungsplan](docs/implementation-plan.md), [Sicherheitsprüfung](docs/security-review.md) und [Modellherkunft](docs/model-provenance.md).
 
 ## Lizenz
 

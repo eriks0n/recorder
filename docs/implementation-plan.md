@@ -22,7 +22,7 @@ Der Nutzer hat die Tests mit echten Aufnahmen auf später verschoben und ausdrü
 - P4: Abbruch/erneute Verarbeitung, vollständige Ergebnisgenerationen mit atomarem Zeiger, private Dateirechte, lokaler Standardordner und Synchronisationshinweis, blockweises Audiomischen. Pausen behalten die gemeinsame Zeitachse durch Stille. Hardware-/Langlaufabnahme offen.
 - P5: lokaler MLX-Adapter, Tokenbudget/Abschnitte/Konsolidierung, maximal zwei Reparaturversuche, Schema-/Beleg-/Frist-/Zuständigenprüfung, vier Exportabschnitte und separate Fehleranzeige implementiert. **MLX-Build und Inferenz sind inzwischen verifiziert**: Xcode 27.1 und Metal Toolchain installiert; vollständige App gebaut. Künstliches deutsches Meeting erzeugt vier Abschnitte, beide expliziten Aufgaben und gültige Belege. Genannte Frist erhalten, fehlende Frist leer. Kein Cloud-Fallback.
 
-Prüfstand: 56 ausführbare Kernprüfungen bestanden (ohne echte Meetings, mit synthetischen Testtönen); Release-App gebaut, Ressourcen gebündelt und Ad-hoc-Signatur geprüft. Nach Installation von Xcode wurden 149 XCTest-Tests ohne Fehler ausgeführt, davon 12 Geräte-/Aufnahmefälle bewusst ausgelassen. Der frühere CLT-Blocker ist damit behoben.
+Prüfstand: 56 ausführbare Kernprüfungen bestanden (ohne echte Meetings, mit synthetischen Testtönen); Release-App gebaut, Ressourcen gebündelt und Ad-hoc-Signatur geprüft. Nach Installation von Xcode und der Inbox-Erweiterung wurden 179 XCTest-Tests ohne Fehler ausgeführt, davon 12 Geräte-/Aufnahmefälle bewusst ausgelassen. Der frühere CLT-Blocker ist damit behoben.
 
 V1 ist damit als Implementierung fortgeschritten, aber noch nicht vollständig abgenommen. Insbesondere werden die ursprünglichen Qualitätsziele nicht als erreicht behauptet. Die aktuelle Bedienung und offenen Prüfschritte stehen im README.
 
@@ -279,3 +279,9 @@ Korrigiert: Spracherkennung zuerst; stille/leere Kanäle überspringen; fehlende
 - Audio-Sofortlöschung prüft beide gültigen Textresultate und den vollständigen Offline-Durchlauf vor dem ersten Löschen. Fremde Anhänge bleiben bestehen; Audio-Verknüpfungen werden nur selbst entfernt.
 - Fingerprinting-Schalter sperrt auch verspätete Ergebnisse laufender Analysen; gespeicherte Profile bleiben beim Ausschalten auf dem Datenträger und sind separat löschbar. Kategorien und Teilnehmer-E-Mail sind nur noch lesbare Altdaten, keine Bedien- oder Matchingkriterien.
 - Prüfstand: 149 XCTest-Tests, 12 ausgelassen, 0 Fehler. Neue Tests verwenden ausschließlich temporäre Dateien und synthetische Daten.
+
+## Beauftragte Erweiterung: Aufgaben-Inbox und Todoist
+
+Der Nutzer hat nach dem Vergleich mit dem Fork die vorgeschlagene Reihenfolge ausdrücklich beauftragt: dauerhafte Verarbeitungswarteschlange → Aufgaben-Inbox → Zuständigkeiten und Fristen → Projektzuordnung → Duplikatschutz → CSV und direkte Übertragung ausgewählter Aufgaben. Neuer Branch `codex/meeting-task-inbox`. Diese konkrete Erweiterung ersetzt die frühere Scope-Grenze „kein Beginn von V2“ insoweit. Bedienung und Grenzen stehen in [task-inbox-todoist.md](task-inbox-todoist.md). Lokale Inferenz bleibt lokal; nur ausdrücklich gewählte Aufgaben dürfen an Todoist übertragen werden.
+
+Abschlussprüfung der Erweiterung: 179 XCTest-Tests, 12 Geräte-/Aufnahmefälle bewusst ausgelassen, 0 Fehler. Enthalten sind die tatsächliche lokale LLM-Inferenz an synthetischem deutschem Text, Warteschlangen-Unterbrechung/Wiederaufnahme, Entwurfsänderungen, CSV, simulierte Todoist-Antworten und ein ausschließlich mit künstlichen Daten gerendertes Inbox-Fenster. Zusätzlich 56 unabhängige Kernprüfungen bestanden. Reale Meeting- und Todoist-Kontoabnahme bleibt offen.
