@@ -19,12 +19,17 @@ MACOS="$CONTENTS/MacOS"
 RESOURCES="$CONTENTS/Resources"
 IDENTITY="${CODESIGN_IDENTITY:--}"
 
+# Prefer installed Xcode without changing the user's system-wide developer selection.
+if [[ -z "${DEVELOPER_DIR:-}" && -d /Applications/Xcode.app/Contents/Developer ]]; then
+    export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
+fi
+export RECORDER_WITH_MLX="${RECORDER_WITH_MLX:-1}"
 SDK="${RECORDER_SDK:-$(xcrun --show-sdk-path)}"
 # The installed CLT macOS-27 SDK lacks SwiftUI's macro plugin. Use the complete 26.5 SDK when available.
-if [[ -z "${RECORDER_SDK:-}" && "$(xcode-select -p)" == *CommandLineTools && -d /Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk ]]; then
+if [[ -z "${RECORDER_SDK:-}" && -z "${DEVELOPER_DIR:-}" && "$(xcode-select -p)" == *CommandLineTools && -d /Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk ]]; then
     SDK=/Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk
 fi
-if [[ "${RECORDER_WITH_MLX:-0}" == 1 ]] && ! xcrun -f metal >/dev/null 2>&1; then
+if [[ "$RECORDER_WITH_MLX" == 1 ]] && ! xcrun metal --version >/dev/null 2>&1; then
     echo "MLX needs full Xcode and Metal tools. Install them before RECORDER_WITH_MLX=1 builds." >&2
     exit 1
 fi

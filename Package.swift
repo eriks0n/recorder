@@ -2,8 +2,8 @@
 import PackageDescription
 import Foundation
 
-// Full MLX builds require Xcode and its Metal compiler. CLT builds keep local ASR available.
-let withMLX = ProcessInfo.processInfo.environment["RECORDER_WITH_MLX"] == "1"
+// The full app includes local summaries. RECORDER_WITH_MLX=0 explicitly builds the transcription-only variant.
+let withMLX = ProcessInfo.processInfo.environment["RECORDER_WITH_MLX"] != "0"
 let mlxPackages: [Package.Dependency] = withMLX ? [.package(url: "https://github.com/ml-explore/mlx-swift-lm.git", exact: "2.29.3")] : []
 let mlxProducts: [Target.Dependency] = withMLX ? [.product(name: "MLXLLM", package: "mlx-swift-lm"), .product(name: "MLXLMCommon", package: "mlx-swift-lm")] : []
 
@@ -30,6 +30,6 @@ let package = Package(
                 .swiftLanguageMode(.v5)
             ]
         ),
-        .testTarget(name: "RecorderTests", dependencies: ["Recorder"])
+        .testTarget(name: "RecorderTests", dependencies: ["Recorder"], swiftSettings: [.swiftLanguageMode(.v5)])
     ]
 )

@@ -104,6 +104,7 @@ final class RecorderModel {
 
     var customerScope = "default"
     var summaryStatus: String?
+    var summaryRunning = false
     var autoSummary = false { didSet { Preferences.autoSummary = autoSummary } }
     var summaryLanguage = "Deutsch" { didSet { Preferences.summaryLanguage = summaryLanguage } }
     var modelDownloadStatus = ""
@@ -809,6 +810,7 @@ final class RecorderModel {
         playbackTask?.cancel(); referencePlayer?.stop()
         if transcriptionState == .running { transcriptionState = .idle }
         summaryStatus = nil
+        summaryRunning = false
     }
     func downloadModels(_ id: String) {
         guard !modelDownloadRunning else { return }
@@ -887,6 +889,8 @@ final class RecorderModel {
         guard let document = lastDocument, let pending = lastTranscription else { return }
         let input = document.summaryInput
         summaryStatus = "Zusammenfassen…"
+        summaryRunning = true
+        defer { if processingID == operation { summaryRunning = false } }
         live.releaseModels()
         do {
             let result = try await MeetingSummaryService().generate(input, language: summaryLanguage) { message in

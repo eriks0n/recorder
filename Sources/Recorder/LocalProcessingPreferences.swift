@@ -33,7 +33,10 @@ struct LocalProcessingPreferences: View {
                 Picker("Sprache", selection: $model.summaryLanguage) {
                     Text("Deutsch").tag("Deutsch"); Text("English").tag("English")
                 }
-                Text("MLX benötigt einen mit vollständigem Xcode und Metal gebauten Recorder (RECORDER_WITH_MLX=1). Dieser Modus lädt das LLM erst nach der Transkription.").font(.caption)
+                Text(MeetingSummaryService.isAvailable
+                     ? "Zusammenfassungen werden vollständig auf diesem Mac erstellt. Das Sprachmodell wird erst nach der Transkription geladen."
+                     : "Zusammenfassungen sind in dieser App-Version nicht verfügbar. Bitte die vollständige Recorder-Version verwenden.")
+                    .font(.caption)
             }
             Section("Sprecherprofile") {
                 Toggle("Namensvorschläge aktivieren (nach eigener Kalibrierung)", isOn: $model.matchingCalibrated)

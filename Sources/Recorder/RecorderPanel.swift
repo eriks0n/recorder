@@ -468,11 +468,19 @@ struct RecorderPanel: View {
 
                 if !model.currentSpeakers.isEmpty {
                     speakerChips
-                    Button("Zusammenfassung erstellen / erneuern") { model.summarize() }
-                    Button("Zusammenfassung öffnen") { model.openSummary() }
+                    if MeetingSummaryService.isAvailable {
+                        Button("Zusammenfassung erstellen / erneuern") { model.summarize() }
+                            .disabled(model.summaryRunning)
+                        Button("Zusammenfassung öffnen") { model.openSummary() }
+                    } else {
+                        Text("Zusammenfassungen sind in dieser App-Version nicht verfügbar.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
                     if let status = model.summaryStatus {
                         Text(status).font(.caption).fixedSize(horizontal: false, vertical: true)
-                        Button("Verarbeitung abbrechen") { model.cancelProcessing() }
+                        if model.summaryRunning {
+                            Button("Verarbeitung abbrechen") { model.cancelProcessing() }
+                        }
                     }
                 }
             }
