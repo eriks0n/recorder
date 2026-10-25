@@ -44,6 +44,10 @@ struct RecorderPanel: View {
                 .disabled(model.retentionRunning)
 
             audioHandlingChip
+            if !model.processingQueue.unfinished.isEmpty {
+                Text("\(model.processingQueue.unfinished.count) Aufträge · " + (model.state == .idle ? (model.queueStatus ?? "Warteschlange") : "Fortsetzung nach der Aufnahme"))
+                    .font(.caption).foregroundStyle(.secondary)
+            }
             if model.deleteAudioAfterProcessing && model.audioHandlingMode.retainsAudio {
                 Text("Audio wird nur bis zur erfolgreichen Transkription und Zusammenfassung aufbewahrt.")
                     .font(.caption2).foregroundStyle(.secondary)

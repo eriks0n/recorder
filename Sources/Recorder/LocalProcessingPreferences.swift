@@ -6,6 +6,18 @@ struct LocalProcessingPreferences: View {
     var body: some View {
         @Bindable var model = model
         Form {
+            Section("Verarbeitung") {
+                Text(model.queueStatus ?? "Offene Aufnahmen werden der Reihe nach verarbeitet. Während einer Aufnahme pausiert die Warteschlange.").font(.caption)
+                if let error = model.processingQueue.storageError { Text(error).foregroundStyle(.red) }
+                ForEach(model.processingQueue.unfinished) { job in
+                    VStack(alignment: .leading) {
+                        Text(job.title ?? "Aufnahme")
+                        Text(job.state == .running ? "Wird verarbeitet" : job.state == .failed ? "Fehlgeschlagen" : "Wartet").font(.caption)
+                        if let error = job.error { Text(error).font(.caption).foregroundStyle(.secondary) }
+                        if job.state == .failed { Button("Erneut versuchen") { model.retryProcessingJob(job.id) } }
+                    }
+                }
+            }
             Section("Lokale Modelle") {
                 Button("Whisper-Modell herunterladen / laden") { model.downloadWhisper() }
                 Button("Sprechertrennung herunterladen") { model.downloadModels("diar") }

@@ -178,6 +178,11 @@ final class RecorderModel {
         let startedAt: Date
     }
     @ObservationIgnored private var lastTranscription: PendingTranscription?
+    let processingQueue = ProcessingQueue()
+    @ObservationIgnored private var activeProcessingJob: UUID?
+    @ObservationIgnored private var queueWorker: Task<Void, Never>?
+    var queueStatus: String?
+
 
     // MARK: - Lifecycle
 
@@ -192,6 +197,7 @@ final class RecorderModel {
         // Load prior recordings from disk so they survive restarts.
         refreshRecordings()
         startRetentionChecks()
+        pumpProcessingQueue()
 
         // Biometric data should not outlive its purpose: drop voiceprints nobody named.
         if voiceProfilesEnabled { speakerStore.prunePending() }
@@ -285,10 +291,9 @@ final class RecorderModel {
         guard state == .idle else { return }
         guard !retentionRunning else { statusMessage = "Dateien werden gerade bereinigt. Bitte kurz warten."; return }
 
-        cancelProcessing()
+        cancelProcessing(requeue: true)
         recordingGeneration = UUID()
         lastDocument = nil
-        speakerStore.clearPending()
         let mode = audioHandlingMode
         guard !mode.producesNothing(liveTranscriptionEnabled: liveTranscriptionEnabled) else {
             statusMessage = "Transcript-only mode needs live transcription switched on, otherwise nothing would be saved."
@@ -489,14 +494,13 @@ final class RecorderModel {
             statusMessage = "Finishing the transcript…"
             Task { [weak self] in
                 guard let self else { return }
-                defer { self.pendingSaveFolders.remove(folderURL) }
+                defer { self.pendingSaveFolders.remove(folderURL); self.pumpProcessingQueue() }
                 guard let liveResult = await liveTask?.value, !liveResult.isEmpty else {
                     self.transcriptionState = .failed("Nothing was transcribed, and no audio was kept.")
                     self.statusMessage = "Nothing to save"
                     self.refreshRecordings()
                     return
                 }
-                guard self.recordingGeneration == recordingGeneration else { return }
                 self.writeLiveTranscript(liveResult.lines, pending: pending, keepStatus: true)
                 self.statusMessage = "Transcript saved, no audio kept"
             }
@@ -522,7 +526,7 @@ final class RecorderModel {
 
         // Mix off the main actor; keep raw CAFs regardless of outcome.
         Task.detached(priority: .utility) { [weak self] in
-            defer { Task { @MainActor [weak self] in self?.pendingSaveFolders.remove(folderURL) } }
+            defer { Task { @MainActor [weak self] in self?.pendingSaveFolders.remove(folderURL); self?.pumpProcessingQueue() } }
             var mixError: Error? = nil
             do {
                 try StereoMixer.mix(
@@ -558,7 +562,6 @@ final class RecorderModel {
 
             await MainActor.run { [weak self] in
                 guard let self else { return }
-                guard self.state == .idle, self.recordingGeneration == recordingGeneration else { return }
                 if mixError == nil, needsOfflineTranscription {
                     self.startTranscription(pending)
                 } else if let liveResult, !liveResult.isEmpty, liveResult.complete {
@@ -604,6 +607,7 @@ final class RecorderModel {
         lastTranscriptURL = nil
         lastTranscription = nil
         refreshRecordings()
+        pumpProcessingQueue()
     }
 
     func refreshMeetings() {
@@ -695,32 +699,78 @@ final class RecorderModel {
 
     /// Transcribe a saved recording's audio with the local model.
     private func startTranscription(_ pending: PendingTranscription) {
-        guard state == .idle, !retentionRunning else { return }
-        cancelProcessing()
-        let operation = UUID(); processingID = operation
-        let fingerprintToken = live.fingerprinting.token
-        lastTranscription = pending
-        lastTranscriptText = nil
-        lastTranscriptURL = nil
-
+        enqueueProcessing(pending, kind: .transcription)
+    }
+    private func enqueueProcessing(_ pending: PendingTranscription, kind: ProcessingJobKind) {
+        let job = ProcessingJob(kind: kind, folder: pending.folderURL, audio: pending.audioURL,
+                                title: pending.meetingTitle, attendees: pending.attendees, startedAt: pending.startedAt,
+                                whisperModel: whisperModel, language: transcriptionLanguage, summaryLanguage: summaryLanguage,
+                                summarize: automaticSummaryEnabled, deleteAudio: deleteAudioAfterProcessing)
+        do { try processingQueue.enqueue(job); queueStatus = "Zur Verarbeitung vorgemerkt"; pumpProcessingQueue() }
+        catch { queueStatus = error.localizedDescription }
+    }
+    func retryProcessingJob(_ id: UUID) {
+        do { try processingQueue.update(id, state: .waiting); pumpProcessingQueue() }
+        catch { queueStatus = error.localizedDescription }
+    }
+    func pumpProcessingQueue() {
+        guard initialized, state == .idle, !retentionRunning, pendingSaveFolders.isEmpty,
+              queueWorker == nil, let job = processingQueue.next else { return }
+        do { try processingQueue.update(job.id, state: .running) }
+        catch { queueStatus = error.localizedDescription; return }
+        let operation = UUID(); processingID = operation; activeProcessingJob = job.id
         transcriptionState = .running
-        statusMessage = "Transcribing locally…"
-
-        processingTask = Task { [weak self] in
+        queueStatus = "Verarbeite: " + (job.title ?? "Aufnahme")
+        queueWorker = Task { [weak self] in
             guard let self else { return }
-            guard let audioURL = pending.audioURL else {
-                self.transcriptionState = .failed("This recording kept no audio, so it cannot be transcribed again.")
-                return
+            defer {
+                if self.processingID == operation {
+                    self.activeProcessingJob = nil
+                    if self.transcriptionState == .running { self.transcriptionState = .idle }
+                    self.summaryRunning = false
+                }
+                self.queueWorker = nil
+                self.live.language = self.transcriptionLanguage == "auto" ? nil : self.transcriptionLanguage
+                self.refreshRecordings()
+                self.pumpProcessingQueue()
             }
             do {
-                await self.live.loadModel(self.whisperModel, downloadIfNeeded: false)
+                try RecordingRetention.requireSafeFolder(job.folder)
+                if job.kind == .transcription { try await self.runQueuedTranscription(job, operation: operation) }
+                else { try await self.generateQueuedSummary(job, operation: operation) }
+                try Task.checkCancellation()
+                try self.processingQueue.update(job.id, state: .done)
+                self.queueStatus = "Verarbeitung abgeschlossen"
+            } catch is CancellationError {
+                // The interruption path already persisted waiting/failed before cancelling.
+            } catch {
+                guard self.processingID == operation, !Task.isCancelled else { return }
+                do { try self.processingQueue.update(job.id, state: .failed, error: RecorderModel.describeTranscriptionError(error)) }
+                catch { self.queueStatus = error.localizedDescription }
+                if self.processingID == operation { self.queueStatus = error.localizedDescription; self.transcriptionState = .failed(error.localizedDescription) }
+            }
+        }
+    }
+    private func presentProcessed(_ document: TranscriptDocument, pending: PendingTranscription, markdown: URL) {
+        guard state == .idle, lastTranscription == nil || lastTranscription?.folderURL == pending.folderURL else { return }
+        lastTranscription = pending; lastDocument = document
+        lastTranscriptText = document.renderMarkdown(); lastTranscriptURL = markdown
+        transcriptionState = .done(markdown)
+    }
+    private func runQueuedTranscription(_ job: ProcessingJob, operation: UUID) async throws {
+        let pending = PendingTranscription(audioURL: job.audio, folderURL: job.folder, meetingTitle: job.title, attendees: job.attendees, startedAt: job.startedAt)
+        let fingerprintToken = live.fingerprinting.token
+        guard let audioURL = job.audio else { throw LocalError.message("Kein Audio für erneute Transkription vorhanden.") }
+        try RecordingRetention.requireContainedRegularFile(audioURL, in: job.folder)
+                try Task.checkCancellation()
+                await self.live.loadModel(job.whisperModel, downloadIfNeeded: false)
+                try Task.checkCancellation()
+                self.live.language = job.language == "auto" ? nil : job.language
                 let offline = try await self.live.transcribeFile(audioURL)
                 try Task.checkCancellation()
-                guard self.processingID == operation else { return }
+                guard self.processingID == operation else { throw CancellationError() }
                 guard !offline.lines.isEmpty else {
-                    self.transcriptionState = .failed("The model returned an empty transcript (silent audio?).")
-                    self.statusMessage = "Transcription produced no text"
-                    return
+                    throw LocalError.message("Die Aufnahme enthält keinen erkennbaren Text.")
                 }
                 let names = offline.speakerNames
                 let record = (try? PrivateStorage.read(MeetingRecord.self, from: pending.folderURL.appendingPathComponent("meeting.json"))) ?? MeetingRecord(scope: "default", startedAt: pending.startedAt, title: pending.meetingTitle)
@@ -775,20 +825,14 @@ final class RecorderModel {
                 )
                 document.schemaVersion = 1; document.meetingRecord = record; document.proposedNames = proposals
                 document.processingWarnings = offline.warnings
-                self.writeTranscript(document: document, pending: pending, keepStatus: false)
+                let markdown = try TranscriptRepository.publish(document, folder: pending.folderURL)
+                document = try TranscriptDocument.load(from: pending.folderURL.appendingPathComponent("transcript.json"))
+                self.presentProcessed(document, pending: pending, markdown: markdown)
                 self.live.releaseModels()
-                guard case .done = self.transcriptionState else { return }
-                if self.automaticSummaryEnabled { await self.generateSummary(operation: operation) }
-            } catch is CancellationError {
-                guard self.processingID == operation else { return }
-                self.transcriptionState = .idle; self.statusMessage = "Verarbeitung abgebrochen"
-            } catch {
-                guard self.processingID == operation else { return }
-                let message = RecorderModel.describeTranscriptionError(error)
-                self.transcriptionState = .failed(message)
-                self.statusMessage = "Transcription failed"
-            }
-        }
+                if job.summarize {
+                    try self.processingQueue.update(job.id, state: .running, kind: .summary)
+                    try await self.generateQueuedSummary(job, operation: operation)
+                }
     }
 
     /// Compose the transcript document, write it to transcript.md, and update
@@ -800,22 +844,18 @@ final class RecorderModel {
         pending: PendingTranscription,
         keepStatus: Bool
     ) {
-        writeTranscript(
-            document: TranscriptDocument(
-                live: lines,
-                meetingTitle: pending.meetingTitle,
-                attendees: pending.attendees,
-                startedAt: pending.startedAt,
-                audioName: pending.audioURL?.lastPathComponent,
-                model: live.loadedModelName ?? live.modelName
-            ),
-            pending: pending,
-            keepStatus: keepStatus
-        )
-        if automaticSummaryEnabled, case .done = transcriptionState {
-            let operation = UUID(); processingID = operation
-            processingTask = Task { [weak self] in await self?.generateSummary(operation: operation) }
-        }
+        var document = TranscriptDocument(live: lines, meetingTitle: pending.meetingTitle, attendees: pending.attendees,
+                                          startedAt: pending.startedAt, audioName: pending.audioURL?.lastPathComponent,
+                                          model: live.loadedModelName ?? live.modelName)
+        do {
+            document.schemaVersion = 1
+            document.meetingRecord = try PrivateStorage.read(MeetingRecord.self, from: pending.folderURL.appendingPathComponent("meeting.json"))
+            let markdown = try TranscriptRepository.publish(document, folder: pending.folderURL)
+            document = try TranscriptDocument.load(from: pending.folderURL.appendingPathComponent("transcript.json"))
+            presentProcessed(document, pending: pending, markdown: markdown)
+            if automaticSummaryEnabled { enqueueProcessing(pending, kind: .summary) }
+            refreshRecordings()
+        } catch { queueStatus = error.localizedDescription }
     }
 
     /// Write `transcript.json` and render `transcript.md` from it. The sidecar is written
@@ -863,7 +903,7 @@ final class RecorderModel {
     func runRetentionCleanup() {
         guard retentionEnabled, !retentionRunning else { return }
         guard state == .idle, transcriptionState != .running, !summaryRunning,
-              pendingSaveFolders.isEmpty, referencePlayer?.isPlaying != true else {
+              pendingSaveFolders.isEmpty, processingQueue.unfinished.isEmpty, referencePlayer?.isPlaying != true else {
             retentionStatus = "Bereinigung wird beim nächsten Prüflauf nach der Aufnahme oder Verarbeitung nachgeholt."
             return
         }
@@ -914,7 +954,13 @@ final class RecorderModel {
         } catch { statusMessage = error.localizedDescription; return false }
     }
 
-    func cancelProcessing() {
+    func cancelProcessing(requeue: Bool = false) {
+        if let id = activeProcessingJob {
+            do { try processingQueue.update(id, state: requeue ? .waiting : .failed, error: requeue ? nil : "Verarbeitung abgebrochen. Erneut starten ist möglich.") }
+            catch { queueStatus = error.localizedDescription }
+        }
+        queueWorker?.cancel()
+        activeProcessingJob = nil
         processingTask?.cancel(); processingTask = nil; processingID = UUID()
         playbackTask?.cancel(); referencePlayer?.stop()
         if transcriptionState == .running { transcriptionState = .idle }
@@ -1004,52 +1050,41 @@ final class RecorderModel {
         } catch { statusMessage = error.localizedDescription }
     }
     func summarize() {
-        guard state == .idle, !retentionRunning, lastDocument != nil else { return }
-        cancelProcessing(); let operation = UUID(); processingID = operation
-        processingTask = Task { await generateSummary(operation: operation) }
+        guard !retentionRunning, let pending = lastTranscription, lastDocument != nil else { return }
+        enqueueProcessing(pending, kind: .summary)
     }
-    private func generateSummary(operation: UUID) async {
-        guard processingID == operation, state == .idle, !Task.isCancelled,
-              let document = lastDocument, let pending = lastTranscription else { return }
+    private func generateQueuedSummary(_ job: ProcessingJob, operation: UUID) async throws {
+        try Task.checkCancellation()
+        guard processingID == operation else { throw CancellationError() }
+        let document = try TranscriptDocument.load(from: job.folder.appendingPathComponent("transcript.json"))
         let input = document.summaryInput
-        summaryStatus = "Zusammenfassen…"
-        summaryRunning = true
+        summaryStatus = "Zusammenfassen…"; summaryRunning = true
         defer { if processingID == operation { summaryRunning = false } }
         live.releaseModels()
-        do {
-            let result = try await MeetingSummaryService().generate(input, language: summaryLanguage) { message in
-                await MainActor.run { [weak self] in if self?.processingID == operation { self?.summaryStatus = message } }
-            }
-            try Task.checkCancellation()
-            guard processingID == operation, lastDocument == document else { return }
-            try SummaryRepository.publish(result, transcript: input, folder: pending.folderURL)
-            summaryStatus = "Zusammenfassung gespeichert"
-            if deleteAudioAfterProcessing {
-                do {
-                    let removed = try RecordingAudioCleanup.removeAfterSuccessfulProcessing(in: pending.folderURL)
-                    let document = try TranscriptDocument.load(from: pending.folderURL.appendingPathComponent("transcript.json"))
-                    lastDocument = document; lastTranscriptText = document.renderMarkdown()
-                    lastTranscriptURL = (try TranscriptRepository.currentJSON(in: pending.folderURL))?.deletingLastPathComponent().appendingPathComponent("transcript.md")
-                        ?? pending.folderURL.appendingPathComponent("transcript.md")
-                    lastTranscription = PendingTranscription(audioURL: nil, folderURL: pending.folderURL,
-                                                            meetingTitle: pending.meetingTitle, attendees: pending.attendees, startedAt: pending.startedAt)
-                    if let url = lastTranscriptURL { transcriptionState = .done(url) }
-                    refreshRecordings()
-                    summaryStatus = removed > 0
-                        ? "Transkript und Zusammenfassung gespeichert · Audio gelöscht"
-                        : "Transkript und Zusammenfassung gespeichert · kein Audio aufbewahrt"
-                } catch is CancellationError { throw CancellationError() }
-                catch {
-                    refreshRecordings()
-                    summaryStatus = "Zusammenfassung gespeichert. Die Audio-Bereinigung konnte nicht vollständig abgeschlossen werden: " + error.localizedDescription
-                }
-            }
-        } catch is CancellationError { if processingID == operation { summaryStatus = "Zusammenfassung abgebrochen" } }
-        catch { if processingID == operation { summaryStatus = error.localizedDescription } }
+        let result = try await MeetingSummaryService().generate(input, language: job.summaryLanguage) { message in
+            await MainActor.run { [weak self] in if self?.processingID == operation { self?.summaryStatus = message } }
+        }
+        try Task.checkCancellation()
+        let current = try TranscriptDocument.load(from: job.folder.appendingPathComponent("transcript.json"))
+        guard processingID == operation, current.summaryInput.hash == input.hash else {
+            throw LocalError.message("Transkript wurde geändert. Bitte die Zusammenfassung erneut erstellen.")
+        }
+        try SummaryRepository.publish(result, transcript: input, folder: job.folder)
+        summaryStatus = "Zusammenfassung gespeichert"
+        if job.deleteAudio {
+            do {
+                _ = try RecordingAudioCleanup.removeAfterSuccessfulProcessing(in: job.folder)
+                summaryStatus = "Texte gespeichert · Audio gelöscht"
+            } catch is CancellationError { throw CancellationError() }
+            catch { summaryStatus = "Zusammenfassung gespeichert · Audio bleibt: " + error.localizedDescription }
+        }
+        let refreshed = try TranscriptDocument.load(from: job.folder.appendingPathComponent("transcript.json"))
+        let pending = PendingTranscription(audioURL: refreshed.audioName.map { job.folder.appendingPathComponent($0) }, folderURL: job.folder, meetingTitle: job.title, attendees: job.attendees, startedAt: job.startedAt)
+        let markdown = (try TranscriptRepository.currentJSON(in: job.folder))?.deletingLastPathComponent().appendingPathComponent("transcript.md") ?? job.folder.appendingPathComponent("transcript.md")
+        presentProcessed(refreshed, pending: pending, markdown: markdown)
     }
     func showSavedTranscript(_ entry: RecordingEntry) {
         guard !retentionRunning else { return }
-        cancelProcessing()
         guard let url = entry.transcriptURL else { return }
         do {
             lastDocument = try TranscriptDocument.load(from: entry.folderURL.appendingPathComponent("transcript.json"))
