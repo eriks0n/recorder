@@ -87,9 +87,10 @@ final class TranscriptDocumentTests: XCTestCase {
     }
 
     func testRoundTripsThroughJSON() throws {
-        let url = URL(fileURLWithPath: NSTemporaryDirectory())
-            .appendingPathComponent("doc-\(UUID().uuidString).json")
-        defer { try? FileManager.default.removeItem(at: url) }
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("TranscriptRoundTrip-\(UUID().uuidString)")
+        try PrivateStorage.directory(folder)
+        let url = folder.appendingPathComponent("document.json")
+        defer { try? FileManager.default.removeItem(at: folder) }
 
         let original = sample()
         try original.write(jsonTo: url)
