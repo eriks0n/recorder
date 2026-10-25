@@ -1,7 +1,6 @@
 # Swift Package Manager build output
 .build/
 .swiftpm/
-Package.resolved
 
 # Assembled app bundle (produced by ./build.sh)
 Recorder.app/
@@ -24,3 +23,16 @@ Recordings/
 icon-work/
 Recorder.iconset/
 Recorder-1024.png
+
+# Meeting content and biometric data must stay outside version control
+*.wav
+*.mp3
+*.flac
+transcript.json
+transcript.md
+summary.json
+summary.md
+profiles.json
+*.safetensors
+*.mlmodelc/
+*.mlpackage/

@@ -46,12 +46,15 @@ enum GeminiKeychain {
             kSecAttrService as String: service,
             kSecAttrAccount as String: account,
         ]
-        // Replace any existing item to avoid errSecDuplicateItem.
-        SecItemDelete(base as CFDictionary)
+        // Update in place so a failed replacement preserves the existing key.
+        let update: [String: Any] = [kSecValueData as String: Data(trimmed.utf8)]
+        let status = SecItemUpdate(base as CFDictionary, update as CFDictionary)
+        if status == errSecSuccess { return true }
+        guard status == errSecItemNotFound else { return false }
 
         var add = base
         add[kSecValueData as String] = Data(trimmed.utf8)
-        add[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
+        add[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
         return SecItemAdd(add as CFDictionary, nil) == errSecSuccess
     }
 

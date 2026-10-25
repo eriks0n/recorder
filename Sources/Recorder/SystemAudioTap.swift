@@ -161,6 +161,7 @@ final class SystemAudioTap {
         destinationURL = url
         tapUUID = UUID()
         firstHostTime = nil
+        paused.withLock { $0 = false }
         capturedFrames = 0
 
         // 1) Build tap + aggregate and read the tap format.

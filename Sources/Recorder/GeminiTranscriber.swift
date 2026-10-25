@@ -43,6 +43,8 @@ struct GeminiTranscriber {
 
     enum TranscriberError: LocalizedError {
         case missingUploadURL
+        case unsafeEndpoint
+        case incompleteResponse
         case uploadFailed(status: Int, body: String)
         case processingFailed
         case generateFailed(status: Int, body: String)
@@ -51,10 +53,14 @@ struct GeminiTranscriber {
 
         var errorDescription: String? {
             switch self {
+            case .unsafeEndpoint:
+                return "Gemini returned an untrusted endpoint; upload stopped."
+            case .incompleteResponse:
+                return "Gemini returned an incomplete transcript. Previous results were kept."
             case .missingUploadURL:
                 return "Gemini upload did not return an upload URL."
             case .uploadFailed(let status, let body):
-                return "Upload failed (HTTP \(status)): \(Self.snippet(body))"
+                return "Upload failed (HTTP \(status)): \("Response details omitted to protect meeting data")"
             case .processingFailed:
                 return "Gemini could not process the uploaded audio."
             case .generateFailed(let status, let body):
@@ -64,7 +70,7 @@ struct GeminiTranscriber {
                 if status == 400 && body.contains("API key") {
                     return "Gemini rejected the API key (HTTP 400). Check the key in Settings."
                 }
-                return "Transcription request failed (HTTP \(status)): \(Self.snippet(body))"
+                return "Transcription request failed (HTTP \(status)): \("Response details omitted to protect meeting data")"
             case .blocked(let reason):
                 return "Gemini blocked the response: \(reason)."
             case .emptyResponse(let finish):
@@ -94,12 +100,28 @@ struct GeminiTranscriber {
     /// Defaults to ``defaultPromptTemplate``.
     var promptTemplate: String = GeminiTranscriber.defaultPromptTemplate
 
+    private final class RedirectPolicy: NSObject, URLSessionTaskDelegate {
+        func urlSession(_ session: URLSession, task: URLSessionTask,
+                        willPerformHTTPRedirection response: HTTPURLResponse,
+                        newRequest request: URLRequest,
+                        completionHandler: @escaping (URLRequest?) -> Void) {
+            // No cross-request redirects carrying audio or credentials.
+            completionHandler(nil)
+        }
+    }
+    private static let session = URLSession(configuration: .ephemeral, delegate: RedirectPolicy(), delegateQueue: nil)
+    static func isTrustedEndpoint(_ url: URL) -> Bool {
+        url.scheme == "https" && url.host == "generativelanguage.googleapis.com"
+            && (url.port == nil || url.port == 443) && url.user == nil && url.password == nil
+    }
+
     private let base = "https://generativelanguage.googleapis.com"
 
     // MARK: - Public
 
     /// Upload + transcribe `audioURL`, returning the model's Markdown transcript.
     func transcribe(audioURL: URL, apiKey: String, context: Context) async throws -> String {
+        try Task.checkCancellation()
         let mime = Self.mime(for: audioURL)
         let uploaded = try await upload(audioURL, apiKey: apiKey, mime: mime)
         let activeURI = try await waitUntilActive(uploaded, apiKey: apiKey)
@@ -119,7 +141,8 @@ struct GeminiTranscriber {
         let size = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int) ?? 0
 
         // 1. Start a resumable session.
-        var start = URLRequest(url: URL(string: "\(base)/upload/v1beta/files?key=\(apiKey)")!)
+        var start = URLRequest(url: URL(string: "\(base)/upload/v1beta/files")!)
+        start.setValue(apiKey, forHTTPHeaderField: "x-goog-api-key")
         start.httpMethod = "POST"
         start.timeoutInterval = 60
         start.setValue("resumable", forHTTPHeaderField: "X-Goog-Upload-Protocol")
@@ -131,7 +154,7 @@ struct GeminiTranscriber {
             withJSONObject: ["file": ["display_name": url.lastPathComponent]]
         )
 
-        let (startData, startResp) = try await URLSession.shared.data(for: start)
+        let (startData, startResp) = try await Self.session.data(for: start)
         let startHTTP = startResp as? HTTPURLResponse
         guard let startHTTP, (200..<300).contains(startHTTP.statusCode) else {
             throw TranscriberError.uploadFailed(
@@ -144,6 +167,8 @@ struct GeminiTranscriber {
             throw TranscriberError.missingUploadURL
         }
 
+        guard Self.isTrustedEndpoint(uploadURL) else { throw TranscriberError.unsafeEndpoint }
+
         // 2. Upload the bytes and finalize in one request (streamed from disk).
         var finalize = URLRequest(url: uploadURL)
         finalize.httpMethod = "POST"
@@ -151,7 +176,7 @@ struct GeminiTranscriber {
         finalize.setValue("0", forHTTPHeaderField: "X-Goog-Upload-Offset")
         finalize.setValue("upload, finalize", forHTTPHeaderField: "X-Goog-Upload-Command")
 
-        let (finData, finResp) = try await URLSession.shared.upload(for: finalize, fromFile: url)
+        let (finData, finResp) = try await Self.session.upload(for: finalize, fromFile: url)
         guard let finHTTP = finResp as? HTTPURLResponse, (200..<300).contains(finHTTP.statusCode) else {
             throw TranscriberError.uploadFailed(
                 status: (finResp as? HTTPURLResponse)?.statusCode ?? -1,
@@ -173,11 +198,16 @@ struct GeminiTranscriber {
     /// generate call anyway.
     private func waitUntilActive(_ file: UploadedFile, apiKey: String) async throws -> String {
         if file.state == "ACTIVE" { return file.uri }
-        let statusURL = URL(string: "\(base)/v1beta/\(file.name)?key=\(apiKey)")!
+        guard file.name.range(of: #"^files/[A-Za-z0-9_-]+$"#, options: .regularExpression) != nil else { throw TranscriberError.unsafeEndpoint }
+        let statusURL = URL(string: "\(base)/v1beta/\(file.name)")!
 
+        var request = URLRequest(url: statusURL)
+        request.setValue(apiKey, forHTTPHeaderField: "x-goog-api-key")
+        request.timeoutInterval = 30
         for _ in 0..<90 {
+            try Task.checkCancellation()
             try await Task.sleep(nanoseconds: 1_000_000_000)
-            guard let (data, resp) = try? await URLSession.shared.data(from: statusURL),
+            guard let (data, resp) = try? await Self.session.data(for: request),
                   let http = resp as? HTTPURLResponse, (200..<300).contains(http.statusCode),
                   let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
                 continue
@@ -191,13 +221,14 @@ struct GeminiTranscriber {
                 continue
             }
         }
-        return file.uri
+        throw TranscriberError.processingFailed
     }
 
     // MARK: - generateContent
 
     private func generate(prompt: String, fileURI: String, mime: String, apiKey: String) async throws -> String {
-        var req = URLRequest(url: URL(string: "\(base)/v1beta/models/\(model):generateContent?key=\(apiKey)")!)
+        var req = URLRequest(url: URL(string: "\(base)/v1beta/models/\(model):generateContent")!)
+        req.setValue(apiKey, forHTTPHeaderField: "x-goog-api-key")
         req.httpMethod = "POST"
         req.timeoutInterval = 600
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -215,7 +246,7 @@ struct GeminiTranscriber {
             ],
         ])
 
-        let (data, resp) = try await URLSession.shared.data(for: req)
+        let (data, resp) = try await Self.session.data(for: req)
         guard let http = resp as? HTTPURLResponse else {
             throw TranscriberError.generateFailed(status: -1, body: "no response")
         }
@@ -239,6 +270,7 @@ struct GeminiTranscriber {
             .joined()
             .trimmingCharacters(in: .whitespacesAndNewlines)
 
+        guard finish == "STOP" else { throw TranscriberError.incompleteResponse }
         guard !text.isEmpty else {
             throw TranscriberError.emptyResponse(finishReason: finish)
         }

@@ -89,7 +89,11 @@ final class RecorderModel {
 
     // MARK: - Lifecycle
 
+    @ObservationIgnored private var initialized = false
+
     func onAppear() {
+        guard !initialized else { return }
+        initialized = true
         // Load persisted preferences first so the UI reflects them immediately.
         loadPreferences()
 
