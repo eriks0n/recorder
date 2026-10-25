@@ -18,3 +18,7 @@ Die genaue Dateiliste und alle Tokenizerrevisionen liegen in `Sources/Recorder/R
 Downloads verwenden ausschließlich feste Snapshot-URLs über HTTPS. Nach vollständiger Installation wird ein SHA-256-Dateimanifest geschrieben und vor dem Laden geprüft. Das erkennt nachträgliche Beschädigung, ist aber keine unabhängige Signatur des Modellherstellers. Keine ausführbaren Modelldateien oder Remote-Code-Ausführung werden unterstützt. Tokenizer und Modelle werden lokal geladen; der mögliche Netzwerk-Fallback des WhisperKit-Tokenizer-Helfers wird durch den lokalen Adapter umgangen.
 
 Das kleine Qwen-Modell ist ein vorläufiger Kandidat. Ein Vergleich mit einer größeren Größenklasse ist ohne Testtranskript und Metal-Werkzeuge noch offen. Die Entscheidung ist daher ausdrücklich nicht als P0-Modellabnahme zu verstehen.
+
+## Laufende MLX-Integration
+
+Xcode 27.1 (27A9275) und Metal Toolchain 27A266a (Compiler 32023.921.6) sind installiert. Der vorhandene Qwen-Snapshot wurde über das Dateimanifest geprüft (10 Dateien, ca. 2,28 GB). Der lokale Inferenztest mit einem künstlichen deutschen Meeting lief erfolgreich und erzeugte beide expliziten Aufgaben mit gültigen Belegen; eine genannte Frist blieb erhalten, eine fehlende Frist leer. Das ist ein Funktionstest eines Kandidaten, kein Vergleich gegen größere Modelle und keine Qualitätszusage für reale Meetings.
