@@ -1,4 +1,6 @@
 import XCTest
+import AppKit
+import SwiftUI
 import CoreML
 import WhisperKit
 @testable import Recorder
@@ -94,5 +96,47 @@ final class MeetingCustomizationTests: XCTestCase {
             XCTAssertLessThanOrEqual(tokens.count, 200)
             XCTAssertTrue(tokens.allSatisfy { $0 < pipe.tokenizer!.specialTokens.specialTokenBegin })
         }
+    }
+}
+
+@MainActor final class CustomizationPreferencesTests: XCTestCase {
+    func testEditingMenuProvidesStandardTextShortcutsWithoutDuplicates() {
+        let app = NSApplication.shared
+        let old = app.mainMenu
+        defer { app.mainMenu = old }
+        app.mainMenu = NSMenu()
+        AppDelegate.installEditingMenu(); AppDelegate.installEditingMenu()
+        let menus = app.mainMenu!.items.compactMap(\.submenu)
+        XCTAssertEqual(menus.count, 1)
+        XCTAssertEqual(menus[0].items.first { $0.action == #selector(NSText.paste(_:)) }?.keyEquivalent, "v")
+        XCTAssertEqual(menus[0].items.first { $0.action == #selector(NSText.selectAll(_:)) }?.keyEquivalent, "a")
+    }
+    func testCustomizationControlsRenderInSettings() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try PrivateStorage.directory(root)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let model = RecorderModel(processingQueue: ProcessingQueue(url: root.appendingPathComponent("queue.json")),
+                                  taskInbox: TaskInbox(url: root.appendingPathComponent("inbox.json")))
+        _ = NSApplication.shared
+        let hosting = NSHostingView(rootView: Form {
+            VocabularyPreferences()
+            SummaryTemplatePreferences()
+        }.formStyle(.grouped).environment(model).environment(\.colorScheme, .dark))
+        let size = NSSize(width: 480, height: 900)
+        let window = NSWindow(contentRect: NSRect(origin: .zero, size: size), styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false; window.appearance = NSAppearance(named: .darkAqua)
+        window.contentView = hosting; hosting.frame = NSRect(origin: .zero, size: size)
+        defer { window.close() }
+        hosting.layoutSubtreeIfNeeded(); RunLoop.main.run(until: Date().addingTimeInterval(0.1))
+        hosting.layoutSubtreeIfNeeded()
+        func editors(_ view: NSView) -> [NSTextView] {
+            (view as? NSTextView).map { [$0] } ?? view.subviews.flatMap { editors($0) }
+        }
+        let fields = editors(hosting)
+        XCTAssertGreaterThanOrEqual(fields.count, 2)
+        for field in fields { XCTAssertTrue(field.isEditable); XCTAssertGreaterThan(field.bounds.width, 200) }
+        let bitmap = try XCTUnwrap(hosting.bitmapImageRepForCachingDisplay(in: hosting.bounds))
+        hosting.cacheDisplay(in: hosting.bounds, to: bitmap)
+        try XCTUnwrap(bitmap.representation(using: .png, properties: [:])).write(to: URL(fileURLWithPath: "/private/tmp/recorder-customization-settings-preview.png"))
     }
 }

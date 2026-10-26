@@ -8,9 +8,9 @@ Basis: [tobi/recorder](https://github.com/tobi/recorder), erweitert mit dem [For
 
 Die vollständige App wurde auf diesem Mac mit Xcode 27.1 und Apples Metal Toolchain gebaut und signiert. WhisperKit/SpeakerKit sowie die lokale MLX-Zusammenfassung sind integriert. Das bereits installierte Qwen3-4B-4bit-Modell wurde anhand eines künstlichen deutschen Meetings getestet: beide ausdrücklichen Aufgaben, gültige Belege und die genannte Frist wurden korrekt ausgegeben; eine fehlende Frist blieb leer.
 
-Prüfstand: letzter vollständiger Lauf **197 XCTest-Tests, davon 12 bewusst ausgelassen, ohne Fehler**. Nach der Korrektur der API-Key-Eingabe zusätzlich **34 gezielte Eingabe-/Todoist-Tests ohne Fehler**, darunter vier neue UI-Tests. Außerdem **56 Kernprüfungen** und **13 Secret-Schutztests** bestanden. Das ersetzt weiterhin nicht die Langlauf- und Qualitätsabnahme mit echten Meetings oder den Vergleich mehrerer LLM-Größen.
+Prüfstand: letzter vollständiger Lauf **210 XCTest-Tests, davon zwölf bewusst ausgelassen, ohne Fehler**, einschließlich echter lokaler Whisper-/LLM-Durchläufe mit synthetischen Daten. Außerdem **56 Kernprüfungen** und **13 Secret-Schutztests** bestanden. Das ersetzt weiterhin nicht die Langlauf- und Qualitätsabnahme mit echten Meetings oder den Vergleich mehrerer LLM-Größen.
 
-Dokumentationsstand: **25. Oktober 2026**, Entwicklungsbranch **`codex/meeting-task-inbox`**. Der Standardbranch `main` enthält noch die frühere Gemini-Version. Diese Anleitung beschreibt den Entwicklungsbranch.
+Dokumentationsstand: **26. Oktober 2026**, Entwicklungsbranch **`codex/meeting-task-inbox`**. Der Standardbranch `main` enthält noch die frühere Gemini-Version. Diese Anleitung beschreibt den Entwicklungsbranch.
 
 ## Bauen und starten
 
@@ -35,6 +35,14 @@ MLX Swift LM ist auf 2.29.3, WhisperKit auf 1.1.0 festgelegt; die genauen Abhän
 8. Bei aktiviertem Fingerprinting lassen sich saubere Referenzabschnitte nach ausdrücklicher Auswahl als Stimmprofil speichern; die Einwilligung der Person sollte vorliegen. Profile werden innerhalb desselben Kundenbereichs und derselben Modellversion verglichen. Es gibt keine Unterscheidung zwischen intern und extern und keine Beschränkung auf Kalenderteilnehmer. Namensvorschläge stets bestätigen oder ablehnen. Unbestätigte Referenzen bleiben im RAM und gehen bei Neustart verloren.
 9. Das Zusammenfassungsmodell unter **Local** herunterladen. Deutsch/Englisch und automatische Erstellung sind einstellbar; manuelles Erstellen und Öffnen sind im Transkriptbereich verfügbar. Zuständige, Fristen und Belege werden validiert; gesprochene Anweisungen im Meeting lösen keine Aktionen aus. Die vier Abschnitte sind Executive Summary, Themen, Action Items und nächste Schritte.
 10. Bestehende Aufnahmen lassen sich über die Bibliothek erneut verarbeiten. Alte Markdown-Transkripte bleiben als Dateien lesbar. Strukturierte Transkripte lassen sich zur Namensbearbeitung wieder laden.
+
+## Eigene Begriffe, Template und Mikrofon
+
+- **Settings → Transcription**: Namen, Marken und Fachbegriffe zeilenweise pflegen. Die Liste unterstützt die Erkennung; sie ersetzt Wörter nicht pauschal und garantiert keine Fehlerfreiheit. Amin und Armin bei Bedarf beide eintragen.
+- **Settings → Local → Markdown-Template**: eigenes Layout mit Platzhaltern bearbeiten und speichern. „Standard einsetzen“ zeigt ein Beispiel. Die belegten Aufgaben bleiben unabhängig vom Layout für Todoist erhalten.
+- **Settings → Recording → Mikrofon**: Systemstandard oder ein bestimmtes Mikrofon für die nächste Aufnahme wählen. Eine fehlende feste Quelle verhindert den Start mit einer Meldung.
+
+Kein festes Minutenlimit. Für lange Aufnahmen begrenzen freier Speicher, RAM und lokale Verarbeitungszeit. 30–60 Minuten sind der vorgesehene Einsatzbereich; für zwei bis vier Stunden sind neue Aufnahmen an Pausen aktuell sinnvoll. Pause schreibt Stille und spart keinen Audiospeicher. Details, Speicherabschätzungen und offene Langlaufabnahme: [Anpassungen und Aufnahmedauer](docs/meeting-customization.md).
 
 ## Sprecher später zuordnen
 
@@ -116,13 +124,13 @@ Nachweise nach Änderung getrennt, damit gezielte Nachprüfungen nicht als neuer
 
 | Prüfung | Letzter nachgewiesener Stand |
 | --- | --- |
-| Vollständige XCTest-Suite mit lokalem LLM | 197 Tests, 12 Geräte-/Aufnahmefälle ausgelassen, 0 Fehler |
+| Vollständige XCTest-Suite mit lokalem LLM | 210 Tests, 12 Geräte-/Aufnahmefälle ausgelassen, 0 Fehler; lokales LLM und Whisper mit synthetischen Daten |
 | API-Key-Eingabe und Todoist nach UI-Korrektur | 34 Tests, einschließlich 4 neuer UI-Tests, 0 Fehler |
 | Unabhängige Kernprüfungen | 56 bestanden |
 | Commit-/Push-Schutz | 13 Tests bestanden; GitHub-Workflow erfolgreich |
 | App-Build | Vollständige MLX-App gebaut, Signatur geprüft |
 
-Der Quellstand enthält nach der UI-Ergänzung insgesamt 201 XCTest-Fälle; ein vollständiger Lauf aller 201 wird hier noch nicht behauptet.
+Der aktuelle vollständige Lauf umfasst alle 210 XCTest-Fälle. Die zwölf übersprungenen Geräte-/Aufnahmefälle bleiben offen.
 
 Die eigenständig ausführbaren Kernprüfungen brauchen weder Modelle noch Mikrofonzugriff. Sie prüfen Bereichs-/Modellfilter, Mehrdeutigkeit, Enrollment, Dateirechte, Belege, Zusammenfassungsgültigkeit, atomare Veröffentlichung, Abbruch und Audiokonvertierung mit synthetischen Testtönen. Die geerbten XCTest-Tests sind im Repository erhalten. Tests mit echten Geräten/Modellen sind opt-in und verwenden die in den Testdateien dokumentierten Umgebungsvariablen. Die ausgelassenen Geräte-/Aufnahmefälle werden hier nicht als bestanden gewertet.
 

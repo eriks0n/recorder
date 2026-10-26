@@ -1,6 +1,6 @@
 # Implementierungsplan: lokaler Meeting-Recorder mit Sprecherprofilen und Zusammenfassungen
 
-Stand: 25. Oktober 2026 · Zielplattform: Lennarts Apple-Silicon-Mac · Ausgangspunkt: https://github.com/tobi/recorder
+Stand: 26. Oktober 2026 · Zielplattform: Lennarts Apple-Silicon-Mac · Ausgangspunkt: https://github.com/tobi/recorder
 
 Status: ursprünglicher Entwurf mit nachgeführtem Umsetzungsstand. Die App und die ausdrücklich beauftragte Aufgaben-Inbox/Todoist-Erweiterung sind implementiert; reale Meeting-/Langlaufabnahme bleibt offen. Aktuelle Bedienung und Prüfnachweise stehen im [README](../README.md) und in [Todoist je Meeting](meeting-todoist-sync.md). Die ursprünglichen Planabschnitte ab „1. Ziel“ dokumentieren historische Anforderungen und sind keine aktuelle Bedienungsanleitung.
 
@@ -8,7 +8,9 @@ Der Plan ist in zwei Stufen geteilt: **V1** liefert schnell ein im Alltag nutzba
 
 ---
 
-## Umsetzungsstand und genehmigte Abweichungen (25. Oktober 2026)
+## Umsetzungsstand und genehmigte Abweichungen (26. Oktober 2026)
+
+**Ergänzung 26. Oktober:** Beauftragte Fachbegriffs-/Namensliste, eigenes Markdown-Template und feste Mikrofonwahl implementiert. Kontext-Hilfe statt pauschaler Namensersetzung; Belege und strukturierte Aufgaben bleiben beim Formatieren erhalten. Aufnahme-/Speichergrenzen und offene Langlaufabnahme sind in [Anpassungen und Aufnahmedauer](meeting-customization.md) beschrieben. Vollständiger aktueller Lauf: 210 XCTest-Fälle, zwölf bewusst ausgelassen, keine Fehler; echte lokale Whisper-/LLM-Verarbeitung synthetischer Daten eingeschlossen, außerdem 56 Kernprüfungen und 13 Secret-Schutztests bestanden.
 
 **Aktuelle Nutzeränderung:** Intern/extern und Kalenderteilnehmerfilter entfallen. Ein einzelner Schalter aktiviert Stimmanalyse, Matching und Enrollment; ausgeschaltet werden keine Profile geladen oder verwendet. Die folgenden ursprünglichen Planabschnitte zu Kategorien/Kalenderfiltern sind dadurch überholt. Zusätzlich gibt es eine standardmäßig ausgeschaltete Sofortlöschung von Audio nach erfolgreicher Transkription und Zusammenfassung; sie erzwingt den vollständigen Offline-Durchlauf und die automatische Zusammenfassung. Fehler oder Abbruch behalten Wiederherstellungs-Audio. Die bestehende zeitgesteuerte Aufbewahrung bleibt unabhängig davon verfügbar.
 
