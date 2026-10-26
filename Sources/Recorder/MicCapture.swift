@@ -91,6 +91,7 @@ final class MicCapture {
 
     // MARK: - Route changes
 
+    private var selectedDeviceUID = ""
     private var configObserver: NSObjectProtocol?
 
     /// Serializes reconfiguration against itself; `running` guards it against `stop`.
@@ -128,9 +129,11 @@ final class MicCapture {
     // MARK: - Start
 
     /// Begin capturing the microphone, writing MONO Float32 to `url` (CAF).
-    func start(writingTo url: URL?) throws {
+    func start(writingTo url: URL?, deviceUID: String = "") throws {
+        selectedDeviceUID = deviceUID
         // Pull the LIVE hardware input format — never hardcode the sample rate.
         let inputNode = engine.inputNode
+        try MicrophoneDevices.select(deviceUID, unit: inputNode.audioUnit)
         let inputFormat = inputNode.inputFormat(forBus: 0)
 
         guard inputFormat.channelCount > 0, inputFormat.sampleRate > 0 else {
@@ -239,6 +242,8 @@ final class MicCapture {
         let inputNode = engine.inputNode
         inputNode.removeTap(onBus: 0)
 
+        do { try MicrophoneDevices.requireSelected(selectedDeviceUID, unit: inputNode.audioUnit) }
+        catch { lock.withLock { self.running = false }; onFatalError?(error); return }
         let newFormat = inputNode.inputFormat(forBus: 0)
         guard newFormat.channelCount > 0, newFormat.sampleRate > 0,
               let newDownmix = AVAudioFormat(

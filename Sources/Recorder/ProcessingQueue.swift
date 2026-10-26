@@ -18,6 +18,8 @@ struct ProcessingJob: Codable, Identifiable {
     var summarize: Bool
     var deleteAudio: Bool
     var error: String?
+    var vocabulary: String?
+    var summaryTemplate: String?
 }
 
 /// Durable queue: interrupted work becomes waiting on restart; failures require an explicit retry.

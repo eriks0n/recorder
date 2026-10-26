@@ -143,6 +143,9 @@ final class RecorderModel {
     var deleteAudioAfterProcessing = false { didSet { Preferences.deleteAudioAfterProcessing = deleteAudioAfterProcessing } }
     var automaticSummaryEnabled: Bool { autoSummary || deleteAudioAfterProcessing }
     var autoSummary = false { didSet { Preferences.autoSummary = autoSummary } }
+    var transcriptionVocabulary = "" { didSet { Preferences.transcriptionVocabulary = transcriptionVocabulary } }
+    var summaryTemplate = "" { didSet { Preferences.summaryTemplate = summaryTemplate } }
+    var microphoneUID = "" { didSet { Preferences.microphoneUID = microphoneUID } }
     var summaryLanguage = "Deutsch" { didSet { Preferences.summaryLanguage = summaryLanguage } }
     var modelDownloadStatus = ""
     var modelDownloadRunning = false
@@ -295,6 +298,9 @@ final class RecorderModel {
         recordingPath = Preferences.recordingPath
         deleteAudioAfterProcessing = Preferences.deleteAudioAfterProcessing
         autoSummary = Preferences.autoSummary
+        transcriptionVocabulary = Preferences.transcriptionVocabulary
+        summaryTemplate = Preferences.summaryTemplate
+        microphoneUID = Preferences.microphoneUID
         summaryLanguage = Preferences.summaryLanguage
         retentionDays = Preferences.retentionDays
         retentionEnabled = Preferences.retentionEnabled
@@ -380,7 +386,7 @@ final class RecorderModel {
         // Start both captures.
         do {
             try tap.start(writingTo: session.desktopURL)
-            try mic.start(writingTo: session.micURL)
+            try mic.start(writingTo: session.micURL, deviceUID: microphoneUID)
         } catch {
             statusMessage = "Could not start capture: \(error.localizedDescription)"
             _ = tap.stop()
@@ -726,7 +732,7 @@ final class RecorderModel {
         let job = ProcessingJob(kind: kind, folder: pending.folderURL, audio: pending.audioURL,
                                 title: pending.meetingTitle, attendees: pending.attendees, startedAt: pending.startedAt,
                                 whisperModel: whisperModel, language: transcriptionLanguage, summaryLanguage: summaryLanguage,
-                                summarize: automaticSummaryEnabled, deleteAudio: deleteAudioAfterProcessing)
+                                summarize: automaticSummaryEnabled, deleteAudio: deleteAudioAfterProcessing, vocabulary: transcriptionVocabulary, summaryTemplate: summaryTemplate)
         do { try processingQueue.enqueue(job); queueStatus = "Zur Verarbeitung vorgemerkt"; pumpProcessingQueue() }
         catch { queueStatus = error.localizedDescription }
     }
@@ -788,7 +794,7 @@ final class RecorderModel {
         await self.live.loadModel(job.whisperModel, downloadIfNeeded: false)
         try Task.checkCancellation()
         self.live.language = job.language == "auto" ? nil : job.language
-        let offline = try await self.live.transcribeFile(audioURL)
+        let offline = try await self.live.transcribeFile(audioURL, vocabulary: job.vocabulary ?? transcriptionVocabulary)
         try Task.checkCancellation()
         guard self.processingID == operation else { throw CancellationError() }
         guard !offline.lines.isEmpty else {
@@ -1089,7 +1095,7 @@ final class RecorderModel {
         summaryStatus = "Zusammenfassen…"; summaryRunning = true
         defer { if processingID == operation { summaryRunning = false } }
         live.releaseModels()
-        let result = try await MeetingSummaryService().generate(input, language: job.summaryLanguage) { message in
+        let result = try await MeetingSummaryService().generate(input, language: job.summaryLanguage, template: job.summaryTemplate ?? summaryTemplate) { message in
             await MainActor.run { [weak self] in if self?.processingID == operation { self?.summaryStatus = message } }
         }
         try Task.checkCancellation()

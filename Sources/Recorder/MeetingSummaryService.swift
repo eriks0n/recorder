@@ -37,6 +37,7 @@ struct MeetingSummary: Codable {
     var transcriptHash: String
     var modelVersion: String
     var promptVersion = "1"
+    var markdownTemplate: String?
     var language: String
     var content: SummaryContent
     func markdown(transcript: MeetingTranscript) -> String {
@@ -49,10 +50,13 @@ struct MeetingSummary: Codable {
         let english = language == "English"
         var text = "# Executive Summary\n\n" + points(content.executiveSummary)
         text += english ? "\n\n# Topics\n" : "\n\n# Themen\n"
+        let topicsStart = text.endIndex
         for topic in content.topics {
             text += "\n## \(topic.title)\n" + points(topic.statements) + "\n\n" + (english ? "Decisions" : "Entscheidungen") + "\n" + points(topic.decisions) + "\n\n" + (english ? "Open questions" : "Offene Fragen") + "\n" + points(topic.openQuestions) + "\n"
         }
+        let topicsText = String(text[topicsStart...])
         text += "\n# Action Items\n"
+        let actionsStart = text.endIndex
         let actions = content.actionItems.filter { $0.kind != "cancelled" }
         let owners = Set(actions.map { $0.owner ?? (english ? "Unassigned" : "Nicht zugeordnet") }).sorted()
         for owner in owners {
@@ -62,8 +66,18 @@ struct MeetingSummary: Codable {
             }
         }
         if actions.isEmpty { text += english ? "\nNo tasks identified.\n" : "\nKeine Aufgaben erkannt.\n" }
+        let actionsText = String(text[actionsStart...])
         text += english ? "\n# Next steps\n\n" : "\n# Nächste Schritte\n\n"
         text += content.nextSteps.isEmpty ? (english ? "No next steps agreed." : "Keine nächsten Schritte vereinbart.") : points(content.nextSteps)
+        if let template = markdownTemplate, !template.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return SummaryTemplate.render(template, values: [
+                "meeting_title": transcript.meeting.title ?? "Meeting",
+                "executive_summary": points(content.executiveSummary),
+                "topics": topicsText,
+                "action_items": actionsText,
+                "next_steps": content.nextSteps.isEmpty ? (english ? "No next steps agreed." : "Keine nächsten Schritte vereinbart.") : points(content.nextSteps)
+            ]) + "\n"
+        }
         return text + "\n"
     }
 }
@@ -122,7 +136,8 @@ struct MeetingSummaryService {
     Distinguish commitments, proposals and cancelled tasks using kind commitment/proposal/cancelled.
     Later withdrawals override earlier commitments. Next steps contain only explicitly agreed steps. Empty arrays are valid.
     """
-    func generate(_ transcript: MeetingTranscript, language: String, progress: @escaping @Sendable (String) async -> Void) async throws -> MeetingSummary {
+    func generate(_ transcript: MeetingTranscript, language: String, template: String = "", progress: @escaping @Sendable (String) async -> Void) async throws -> MeetingSummary {
+        try SummaryTemplate.validate(template)
         #if canImport(MLXLLM)
         let directory = try ModelManager.verifiedFolder("llm")
         let model = try await LLMModelFactory.shared.loadContainer(configuration: .init(directory: directory))
@@ -199,7 +214,7 @@ struct MeetingSummaryService {
         }
         guard partials.count == 1, let content = partials.first else { throw LocalError.message("Konsolidierung nicht abgeschlossen.") }
         return MeetingSummary(meetingID: transcript.meeting.id, transcriptHash: transcript.hash,
-                              modelVersion: "Qwen3-4B-4bit@4dcb3d1/MLX-2.29.3", language: language, content: content)
+                              modelVersion: "Qwen3-4B-4bit@4dcb3d1/MLX-2.29.3", markdownTemplate: template.isEmpty ? nil : template, language: language, content: content)
         #else
         throw LocalError.message("Lokale Zusammenfassungen sind in dieser App-Version nicht verfügbar. Bitte die vollständige Recorder-Version verwenden. Dein Transkript bleibt erhalten.")
         #endif

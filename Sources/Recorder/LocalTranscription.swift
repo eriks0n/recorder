@@ -91,6 +91,7 @@ final class LocalTranscriptionEngine {
             skipSpecialTokens: true,
             wordTimestamps: forFile,
             suppressBlank: true,
+            concurrentWorkerCount: forFile ? 1 : nil,
             chunkingStrategy: forFile ? .vad : nil
         )
     }
@@ -111,7 +112,7 @@ final class LocalTranscriptionEngine {
     func releaseModels() { host.unload(); speakerKit = nil }
     func discardSpeakerModels() { speakerKit = nil }
 
-    func transcribeFile(_ url: URL) async throws -> OfflineTranscription {
+    func transcribeFile(_ url: URL, vocabulary: String = Preferences.transcriptionVocabulary) async throws -> OfflineTranscription {
         var allWords: [TranscriptWord] = [], intervals: [SpeakerInterval] = [], cleanClusters: [String: ClusterEvidence] = [:]
         var warnings: [String] = []
         let fingerprintToken = fingerprinting.token
@@ -122,7 +123,7 @@ final class LocalTranscriptionEngine {
             let samples = try await Self.load(path: url.path, channel: channel)
             guard AudioSignal.hasSignal(samples) else { continue }
             processingStage = "Transkribieren: Kanal \(channel + 1)"
-            let text = try await transcribe(samples)
+            let text = try await transcribe(samples, vocabulary: vocabulary)
             guard !text.isEmpty else { continue }
             let audioWords = text.map { TranscriptWord(text: $0.text, start: $0.start, end: $0.end,
                                                       channel: channel == 0 ? .desktop : .microphone, speakerID: "unknown") }
@@ -181,10 +182,11 @@ final class LocalTranscriptionEngine {
         }, clusters: cleanClusters, speakerNames: Dictionary(uniqueKeysWithValues: ids.map { ($0, $0) }), warnings: warnings)
     }
 
-    private func transcribe(_ samples: [Float]) async throws -> [TimedText] {
-        let options = decodingOptions(forFile: true)
+    private func transcribe(_ samples: [Float], vocabulary: String) async throws -> [TimedText] {
+        var options = decodingOptions(forFile: true)
         let results = try await host.withPipe { pipe in
-            try await pipe.transcribe(audioArray: samples, decodeOptions: options)
+            options.promptTokens = TranscriptionVocabulary.promptTokens(vocabulary, tokenizer: pipe.tokenizer)
+            return try await pipe.transcribe(audioArray: samples, decodeOptions: options)
         }
         try Task.checkCancellation()
         return try cleanSegments(results).flatMap { segment -> [TimedText] in

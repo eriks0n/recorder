@@ -35,6 +35,7 @@ enum WhisperModelStorage {
                                               tokenizerFolder: tokenizerFolder, verbose: false, logLevel: .none,
                                               load: false, download: false)
                 let kit = try await WhisperKit(config)
+                kit.segmentSeeker = VocabularySegmentSeeker()
                 kit.tokenizer = LocalWhisperTokenizer(tokenizer: wrapper, at: tokenizerFolder)
                 try await kit.loadModels()
                 return kit

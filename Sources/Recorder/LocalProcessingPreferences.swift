@@ -69,6 +69,7 @@ struct LocalProcessingPreferences: View {
                 }
                 if let status = model.retentionStatus { Text(status).font(.caption).foregroundStyle(.secondary) }
             }
+            SummaryTemplatePreferences()
             Section("Zusammenfassung") {
                 Toggle("Nach dem Offline-Transkript automatisch erstellen", isOn: Binding(
                     get: { model.automaticSummaryEnabled }, set: { model.autoSummary = $0 }))

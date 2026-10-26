@@ -88,6 +88,7 @@ private struct RecordingPreferences: View {
     var body: some View {
         @Bindable var model = model
         Form {
+            MicrophonePreferences()
             Section {
                 Picker("Audio handling", selection: $model.audioHandlingMode) {
                     ForEach(AudioHandlingMode.allCases) { mode in
@@ -158,6 +159,7 @@ private struct TranscriptionPreferences: View {
                 Text("Language")
             }
 
+            VocabularyPreferences()
             Section {
                 Toggle("Stream the transcript live while recording", isOn: $model.liveTranscriptionEnabled)
                 Text("Shows the transcript in the panel as it is spoken, with a copy button. Uses more CPU while recording.")

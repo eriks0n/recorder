@@ -33,6 +33,7 @@ final class LiveTranscriber {
 
     /// ISO language code, nil = auto-detect per window.
     var language: String? = nil
+    private var sessionVocabulary = ""
 
     /// Whether live lines carry "You"/"Them" labels from channel attribution.
     var labelSpeakers: Bool = true
@@ -106,6 +107,7 @@ final class LiveTranscriber {
     // MARK: Live session
 
     func beginSession() {
+        sessionVocabulary = Preferences.transcriptionVocabulary
         sessionGeneration += 1
         confirmedLines = []
         hypothesis = ""
@@ -243,9 +245,10 @@ final class LiveTranscriber {
 
         do {
             let window = windowSamples
-            let options = decodingOptions(forFile: false)
+            var options = decodingOptions(forFile: false)
             let results = try await host.withPipe { pipe in
-                try await pipe.transcribe(audioArray: window, decodeOptions: options)
+                options.promptTokens = TranscriptionVocabulary.promptTokens(sessionVocabulary, tokenizer: pipe.tokenizer)
+                return try await pipe.transcribe(audioArray: window, decodeOptions: options)
             }
             guard generation == sessionGeneration else { return }
             let segments = cleanSegments(results)

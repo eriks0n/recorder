@@ -20,6 +20,18 @@ enum Preferences {
         static let voiceProfiles       = "voiceProfilesEnabled"
     }
 
+    static var transcriptionVocabulary: String {
+        get { defaults.string(forKey: "transcriptionVocabulary") ?? "" }
+        set { defaults.set(String(newValue.prefix(TranscriptionVocabulary.maxCharacters)), forKey: "transcriptionVocabulary") }
+    }
+    static var summaryTemplate: String {
+        get { defaults.string(forKey: "summaryTemplate") ?? "" }
+        set { defaults.set(String(newValue.prefix(SummaryTemplate.maxCharacters)), forKey: "summaryTemplate") }
+    }
+    static var microphoneUID: String {
+        get { defaults.string(forKey: "microphoneUID") ?? "" }
+        set { defaults.set(newValue, forKey: "microphoneUID") }
+    }
     static var deleteAudioAfterProcessing: Bool {
         get { defaults.bool(forKey: "deleteAudioAfterSuccessfulProcessing") }
         set { defaults.set(newValue, forKey: "deleteAudioAfterSuccessfulProcessing") }
